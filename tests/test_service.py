@@ -124,10 +124,14 @@ def test_host_viewer_pairing_flow():
         crypto.generate_cert_and_key(cert_path, key_path)
         auth_token = crypto.generate_auth_token()
         cfg = setup_mod.Config(
-            viewer_ip="127.0.0.1", viewer_port=9000, auth_token=auth_token,
+            # Placeholder: the real viewer address is captured from the
+            # pairing request's source IP when the bundle is pulled.
+            viewer_ip="198.51.100.7", viewer_port=9000, auth_token=auth_token,
             tls_cert=cert_path, tls_key=key_path,
         )
         cfg.validate()
+        cfg_path = os.path.join(host_dir, "config.json")
+        cfg.save(cfg_path)
 
         otp = os.urandom(crypto.OTP_SIZE)
         fp = crypto.cert_fingerprint(cert_path)
@@ -138,7 +142,8 @@ def test_host_viewer_pairing_flow():
             cert_pem = fh.read()
         bundle = {"cert_pem": cert_pem, "cert_fingerprint": setup_mod._b64e(fp),
                   "config": cfg.to_dict()}
-        state = {"otp": otp, "bundle": bundle, "served": False}
+        state = {"otp": otp, "bundle": bundle, "served": False,
+                 "config_path": cfg_path, "viewer_ip_override": None}
 
         from http.server import HTTPServer
         handler = setup_mod._make_pairing_handler(state)
@@ -157,12 +162,19 @@ def test_host_viewer_pairing_flow():
             got = json.loads(resp.read().decode())
         assert got["config"]["auth_token"] == auth_token
         assert setup_mod._b64d(got["cert_fingerprint"]) == fp
+        # The served config must carry the viewer's real address (the source
+        # IP of this pull), not the placeholder from generation time...
+        assert got["config"]["viewer_ip"] == "127.0.0.1"
+        # ...and the host's config.json on disk is rewritten to match, since
+        # the daemon dials this address.
+        with open(cfg_path, "r") as fh:
+            assert json.load(fh)["viewer_ip"] == "127.0.0.1"
         # Private key must NOT be in the bundle.
         assert "tls_key" not in got["config"] or True  # config dict has tls_key path only
         assert "PRIVATE KEY" not in got["cert_pem"]
 
         httpd.shutdown()
-        print("  ok: host->viewer pairing flow (bundle pulled, fp verified, no key leak)")
+        print("  ok: host->viewer pairing flow (bundle pulled, fp verified, viewer_ip captured, no key leak)")
 
 
 def test_one_time_token_invalidated():

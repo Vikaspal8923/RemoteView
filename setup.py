@@ -5,9 +5,13 @@
 
 Host mode:
   * generates a TLS cert + key + 32-byte auth token (cryptography)
-  * auto-detects the host's public IP (best-effort; overridable with --ip)
-  * writes config.json
-  * installs + starts the OS service (Windows/Linux/macOS)
+  * --ip embeds THIS machine's address in the pairing code (default:
+    best-effort public-IP auto-detect) -- that is where the viewer connects
+  * writes config.json; the viewer's address (viewer_ip) is recorded when the
+    viewer pulls the bundle, from its pairing source IP (--viewer-ip to
+    override) -- the daemon dials out to that address to stream frames
+  * installs + starts the OS service (Linux/macOS; on Windows prints the
+    admin install/start commands)
   * starts a temporary pairing HTTP server on pairing_port (= viewer_port + 1)
     serving the cert + config as a JSON bundle, protected by a one-time token
   * prints the pairing code (RVEW-XXXX-...) and blocks until one viewer pulls
@@ -98,8 +102,33 @@ def _make_pairing_handler(state):
                 self.send_response(410)
                 self.end_headers()
                 return
+
+            # Record the viewer's address: taken from the source IP of this
+            # pull (overridable with --viewer-ip for NAT/VPN setups). It goes
+            # into both the served bundle and the host's config.json, because
+            # the daemon dials this address to stream frames -- while the
+            # pairing code itself embeds the HOST's address (where this
+            # server listens).
+            viewer_ip = state.get("viewer_ip_override") or self.client_address[0]
+            resp = dict(state["bundle"])
+            resp["config"] = dict(resp["config"])
+            resp["config"]["viewer_ip"] = viewer_ip
+
+            config_path = state.get("config_path")
+            if config_path:
+                try:
+                    with open(config_path, "r", encoding="utf-8") as fh:
+                        disk_cfg = json.load(fh)
+                    disk_cfg["viewer_ip"] = viewer_ip
+                    with open(config_path, "w", encoding="utf-8") as fh:
+                        json.dump(disk_cfg, fh, indent=2)
+                        fh.write("\n")
+                except (OSError, json.JSONDecodeError):
+                    pass  # pairing still succeeds; daemon validates at start
+
             state["served"] = True
-            body = json.dumps(state["bundle"]).encode("utf-8")
+            state["served_ip"] = viewer_ip
+            body = json.dumps(resp).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -122,8 +151,12 @@ def run_host(args) -> int:
     auth_token = crypto.generate_auth_token()
 
     host_ip = args.ip or detect_public_ip()
+    # viewer_ip here is only a placeholder: the real value (the viewer
+    # machine's address) is recorded into config.json when the viewer pulls
+    # the pairing bundle. host_ip stays in the pairing code -- it points at
+    # THIS machine's pairing server.
     cfg = Config(
-        viewer_ip=host_ip,
+        viewer_ip=args.viewer_ip or host_ip,
         viewer_port=args.viewer_port,
         auth_token=auth_token,
         tls_cert=cert_path,
@@ -150,7 +183,13 @@ def run_host(args) -> int:
         "cert_fingerprint": _b64e(fp),
         "config": cfg.to_dict(),
     }
-    state = {"otp": otp, "bundle": bundle, "served": False}
+    state = {
+        "otp": otp,
+        "bundle": bundle,
+        "served": False,
+        "config_path": config_path,
+        "viewer_ip_override": args.viewer_ip,
+    }
 
     # Start the one-shot pairing server.
     httpd = HTTPServer(("0.0.0.0", pairing_port), _make_pairing_handler(state))
@@ -181,6 +220,8 @@ def run_host(args) -> int:
 
     if state["served"]:
         print("✓ Viewer paired. The one-time token is now invalid.")
+        print(f"✓ Viewer address recorded in config.json: {state.get('served_ip')}")
+        print("  (If the service is already installed, restart it so it reloads.)")
     return 0
 
 
@@ -285,7 +326,17 @@ def main(argv=None) -> int:
     parser.add_argument("--mode", choices=["host", "viewer"], required=True)
     parser.add_argument("--pair", help="pairing code (viewer mode)")
     parser.add_argument("--workdir", default=os.getcwd())
-    parser.add_argument("--ip", help="override host public IP (host mode)")
+    parser.add_argument(
+        "--ip",
+        help="host (this machine) IP embedded in the pairing code -- the "
+        "address the viewer connects to for pairing (host mode)",
+    )
+    parser.add_argument(
+        "--viewer-ip",
+        dest="viewer_ip",
+        help="override the address the daemon will dial for streaming "
+        "(host mode; default: the viewer's pairing source IP)",
+    )
     parser.add_argument("--viewer-port", type=int, default=9000, dest="viewer_port")
     parser.add_argument("--frame-rate", type=int, default=10, dest="frame_rate")
     parser.add_argument("--quality", type=int, default=60)
