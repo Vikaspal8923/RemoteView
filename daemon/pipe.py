@@ -106,18 +106,60 @@ def _write_all(handle, data: bytes) -> None:
 # --------------------------------------------------------------------------- #
 # Server side (Boss): create + accept the pipe, read frames in a loop.
 # --------------------------------------------------------------------------- #
+def _build_pipe_security_attributes():
+    """Build SECURITY_ATTRIBUTES granting Everyone read/write on the pipe.
+
+    This follows the official pywin32 named-pipe demo (win32/Demos/service/
+    pipeTestService.py), which builds the ACL programmatically via
+    pywintypes.ACL() + SECURITY_ATTRIBUTES.SetSecurityDescriptorDacl(). Building
+    the security object this way is the proven, reliable pattern -- converting an
+    SDDL string via ConvertStringSecurityDescriptorToSecurityDescriptor does not
+    always produce a working pipe DACL and can cause the client's CreateFile to
+    fail with ERROR_ACCESS_DENIED.
+
+    Security note: this is a LOCAL pipe (\\\\.\\pipe\\), reachable only by processes
+    on the same machine. The real security boundary is the TLS + auth-token layer
+    inside the Boss (Session 0 / SYSTEM); the token and private key are never
+    exposed over this pipe. Frames on the pipe are screen data already destined
+    for the viewer.
+    """
+    require_windows()
+    import pywintypes
+    from ntsecuritycon import (
+        SECURITY_WORLD_SID_AUTHORITY,
+        SECURITY_WORLD_RID,
+        SECURITY_CREATOR_SID_AUTHORITY,
+        SECURITY_CREATOR_OWNER_RID,
+        FILE_GENERIC_READ,
+        FILE_GENERIC_WRITE,
+        FILE_ALL_ACCESS,
+    )
+
+    sa = pywintypes.SECURITY_ATTRIBUTES()
+
+    sid_everyone = pywintypes.SID()
+    sid_everyone.Initialize(SECURITY_WORLD_SID_AUTHORITY, 1)
+    sid_everyone.SetSubAuthority(0, SECURITY_WORLD_RID)
+
+    sid_creator = pywintypes.SID()
+    sid_creator.Initialize(SECURITY_CREATOR_SID_AUTHORITY, 1)
+    sid_creator.SetSubAuthority(0, SECURITY_CREATOR_OWNER_RID)
+
+    acl = pywintypes.ACL()
+    acl.AddAccessAllowedAce(FILE_GENERIC_READ | FILE_GENERIC_WRITE, sid_everyone)
+    acl.AddAccessAllowedAce(FILE_ALL_ACCESS, sid_creator)
+
+    sa.SetSecurityDescriptorDacl(1, acl, 0)
+    return sa
+
+
 def create_server_handle():
-    """Create the INBOUND named-pipe server handle with the ACL from the SDDL.
+    """Create the INBOUND named-pipe server handle.
 
     Returns a pywin32 handle. The caller must call accept_client() next.
     """
     require_windows()
-    sd = win32security.ConvertStringSecurityDescriptorToSecurityDescriptor(
-        PIPE_SDDL, win32security.SDDL_REVISION_1
-    )
-    sa = win32security.SECURITY_ATTRIBUTES()
-    sa.SECURITY_DESCRIPTOR = sd
-    sa.bInheritHandle = True
+    sa = _build_pipe_security_attributes()
 
     handle = win32pipe.CreateNamedPipe(
         PIPE_NAME,
