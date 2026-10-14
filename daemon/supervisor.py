@@ -85,12 +85,14 @@ def _build_user_primary_token(mods, session_id: int):
     win32con = mods["win32con"]
 
     user_token = win32ts.WTSQueryUserToken(session_id)
+    # DuplicateTokenEx(ExistingToken, ImpersonationLevel, DesiredAccess,
+    #                  TokenType, TokenAttributes) -- order matters!
     primary = win32security.DuplicateTokenEx(
         user_token,
-        win32con.MAXIMUM_ALLOWED,
-        None,
-        win32security.SecurityImpersonation,
-        win32security.TokenPrimary,
+        win32security.SecurityImpersonation,  # ImpersonationLevel
+        win32con.MAXIMUM_ALLOWED,             # DesiredAccess
+        win32security.TokenPrimary,           # TokenType
+        None,                                 # TokenAttributes
     )
     return primary
 
@@ -106,28 +108,35 @@ def launch_helper(cfg: Config) -> int:
     mods = _load_win_modules()
     win32process = mods["win32process"]
     win32con = mods["win32con"]
-    win32event = mods["win32event"]
 
     session_id = get_active_session_id()
     primary_token = _build_user_primary_token(mods, session_id)
 
     # Command line for the Helper. Quote the config path in case of spaces.
-    config_path = cfg.config_path or "config.json"
+    config_path = os.path.abspath(cfg.config_path or "config.json")
     cmd = f'"{sys.executable}" -m daemon.main --config "{config_path}" --worker'
 
-    # Environment block for the interactive user (so the Helper sees the right
-    # DISPLAY-equivalent, profile, etc.).
+    # The project root is the parent of the daemon package. The Helper runs
+    # `python -m daemon.main`, which needs this dir on sys.path -- otherwise the
+    # import fails ("No module named daemon") when launched from System32.
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    # Build the user's environment, then ensure PYTHONPATH includes the project
+    # root so `-m daemon.main` resolves regardless of the working directory.
     try:
-        env_block = mods["win32profile"].CreateEnvironmentBlock(primary_token, False)
+        env = dict(mods["win32profile"].CreateEnvironmentBlock(primary_token, False))
     except Exception:
-        env_block = None
+        env = dict(os.environ)
+    existing_pp = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        project_root + os.pathsep + existing_pp if existing_pp else project_root
+    )
 
     startup = win32process.STARTUPINFO()
     startup.dwFlags = win32process.STARTF_USESHOWWINDOW
     startup.wShowWindow = win32con.SW_HIDE  # Helper has no window
 
-    # CREATE_NO_WINDOW keeps the Helper windowless (belt-and-suspenders with the
-    # capture loop itself never opening a GUI).
+    # CREATE_NO_WINDOW keeps the Helper windowless.
     creation_flags = win32con.CREATE_NO_WINDOW | win32con.NORMAL_PRIORITY_CLASS
 
     try:
@@ -139,8 +148,8 @@ def launch_helper(cfg: Config) -> int:
             None,               # thread attributes
             0,                  # inherit handles
             creation_flags,
-            env_block,
-            None,               # current directory
+            env,                # environment (dict, PYTHONPATH set)
+            project_root,       # current directory (so imports resolve)
             startup,
         )
     except Exception as exc:  # pywintypes.error and friends
@@ -183,6 +192,7 @@ def supervise(cfg: Config, should_continue=None) -> None:
 
         # Open a waitable handle for the Helper process and block until it
         # exits, then loop to respawn. We poll should_continue periodically.
+        proc_handle = None
         try:
             proc_handle = win32api.OpenProcess(
                 win32con.SYNCHRONIZE | win32con.PROCESS_QUERY_INFORMATION,
@@ -195,19 +205,26 @@ def supervise(cfg: Config, should_continue=None) -> None:
             continue
 
         # Wait for the Helper to exit, waking every 0.5s to check should_continue.
-        while True:
-            rc = win32event.WaitForSingleObject(proc_handle, 500)
-            if rc == win32con.WAIT_OBJECT_0:
-                print(f"[supervisor] Helper (pid={pid}) exited; respawning", flush=True)
-                break
-            if not should_continue():
-                print("[supervisor] stop requested; terminating Helper", flush=True)
-                try:
-                    psutil.Process(pid).terminate()
-                except Exception:
-                    pass
-                break
-            # rc == WAIT_TIMEOUT: keep waiting.
+        try:
+            while True:
+                rc = win32event.WaitForSingleObject(proc_handle, 500)
+                if rc == win32con.WAIT_OBJECT_0:
+                    print(f"[supervisor] Helper (pid={pid}) exited; respawning", flush=True)
+                    break
+                if not should_continue():
+                    print("[supervisor] stop requested; terminating Helper", flush=True)
+                    try:
+                        psutil.Process(pid).terminate()
+                    except Exception:
+                        pass
+                    break
+                # rc == WAIT_TIMEOUT: keep waiting.
+        finally:
+            # Avoid leaking the process handle across respawn iterations.
+            try:
+                win32api.CloseHandle(proc_handle)
+            except Exception:
+                pass
 
         if not should_continue():
             break

@@ -1,23 +1,22 @@
 """Windows Service wrapper for the RemoteView daemon (the "Boss").
 
 Runs as a registered Windows Service under LocalSystem in Session 0. It:
-
-  1. Starts a background thread that supervises the capture Helper (launched
-     into the interactive user's session; respawned on death).
-  2. Creates the named-pipe frame server and reads JPEG frames from the Helper.
-  3. Bridges those frames into the asyncio streamer, which owns the auth token
+  1. supervises the capture Helper (launched into the user's session,
+     respawned on death),
+  2. creates the named-pipe frame server and reads JPEG frames from the Helper,
+  3. bridges those frames into the asyncio streamer, which owns the auth token
      + TLS and dials out to the viewer.
 
 Because it is a LocalSystem service, a normal (non-admin) user process cannot
 stop it -- stopping requires admin rights (services.msc, `sc stop`, Task
 Manager Services tab). The service has no window.
 
-The pywin32 service base class must be built at import time on Windows, so the
-real class is assembled by build_service_class(). This module imports cleanly
-on Linux so the rest of the package (and tests) can load it.
+The pywin32 ServiceFramework requires a specific lifecycle: __init__ MUST call
+ServiceFramework.__init__(self, args) and create a stop event; SvcStop signals
+that event; SvcDoRun runs the work until the event fires. This module imports
+cleanly on Linux; the concrete class is built by build_service_class().
 
-Manage via the dispatcher at the bottom:
-    python -m daemon.service.windows install|start|stop|remove
+Manage: python -m daemon.service.windows install|start|stop|remove|debug
 """
 
 from __future__ import annotations
@@ -30,6 +29,7 @@ from typing import Optional
 
 SERVICE_NAME = "RemoteViewDaemon"
 DISPLAY_NAME = "RemoteView Daemon"
+SERVICE_DESCRIPTION = "RemoteView screen monitoring daemon (un-killable Boss)."
 
 
 def _load_win32service():
@@ -42,72 +42,57 @@ def _load_win32service():
     return servicemanager, win32event, win32service, win32serviceutil
 
 
-class RemoteViewBossService:
-    """Boss service implementation (pywin32 mixin injected on Windows).
+class BossOrchestrator:
+    """Portable Boss orchestration logic (mixed into the pywin32 service).
 
-    On Windows, build_service_class() returns a subclass that also inherits the
-    pywin32 service base + provides ReportServiceStatus/SvcDoRun plumbing. This
-    class holds the portable orchestration logic.
+    Holds everything that is not pywin32-specific. The pywin32 lifecycle
+    methods live on the concrete class built by build_service_class().
     """
 
-    _svc_name_ = SERVICE_NAME
-    _svc_display_name_ = DISPLAY_NAME
-    _svc_description_ = "RemoteView screen monitoring daemon (un-killable Boss)."
-
-    def __init__(self, args):
-        self._stop_event = threading.Event()
-        self._config_path = os.environ.get("REMOTEVIEW_CONFIG", "config.json")
+    def __init__(self, config_path: str):
+        self._config_path = config_path
+        self._stop = threading.Event()  # set by SvcStop / shutdown
         self._threads = []
 
-    # ---- pywin32 service lifecycle ---- #
-    def SvcStop(self):
-        """Called by the SCM on stop request."""
-        self.ReportServiceStatus(self._win32service.SERVICE_STOP_PENDING)
-        self._stop_event.set()
-        for t in self._threads:
-            t.join(timeout=5)
-
-    def SvcDoRun(self):
-        """Main service entry point (called by the SCM after Start)."""
-        import servicemanager
-
-        servicemanager.LogMsg(
-            servicemanager.EVENTLOG_INFORMATION_TYPE,
-            servicemanager.PYS_SERVICE_STARTED,
-            (self._svc_name_, ""),
-        )
-        self._stop_event.clear()
-        self.main()
-
-    # ---- Boss orchestration ---- #
-    def main(self):
+    def run(self, poll_seconds: float = 0.5) -> None:
+        """Run the Boss until stop() is called. Blocks."""
         from shared.config import Config
-        from daemon import pipe as pipe_mod
-        from daemon import streamer as streamer_mod
         from daemon import supervisor as supervisor_mod
 
         cfg = Config.load(self._config_path)
-        stop_event = self._stop_event
 
         # 1. Supervisor thread: keep the Helper alive in the user session.
         sup_thread = threading.Thread(
             target=supervisor_mod.supervise,
-            args=(cfg, lambda: not stop_event.is_set()),
+            args=(cfg, lambda: not self._stop.is_set()),
             name="helper-supervisor",
             daemon=True,
         )
         sup_thread.start()
         self._threads.append(sup_thread)
 
-        # 2. Frame pump: create the pipe server, accept the Helper, and push
-        #    frames into an asyncio.Queue consumed by the streamer.
+        # 2. Frame pump + 3. streamer run together on one asyncio loop.
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         frame_queue: asyncio.Queue = asyncio.Queue(maxsize=max(4, cfg.frame_rate * 2))
+        source = _AsyncQueueSource(frame_queue, self._stop)
+        try:
+            loop.run_until_complete(self._run_until_stop(loop, frame_queue, source, cfg))
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
 
-        # 3. Streamer: owns TLS + auth, dials out to the viewer. Runs here.
-        source = _AsyncQueueSource(frame_queue, stop_event)
+    def stop(self) -> None:
+        self._stop.set()
 
-        async def run_stream():
-            await streamer_mod.stream_frames(
+    async def _run_until_stop(self, loop, frame_queue, source, cfg):
+        from daemon import streamer as streamer_mod
+
+        pump_task = asyncio.ensure_future(self._pipe_pump(loop, frame_queue))
+        stream_task = asyncio.ensure_future(
+            streamer_mod.stream_frames(
                 cfg.viewer_ip,
                 cfg.viewer_port,
                 cfg.auth_token,
@@ -115,24 +100,9 @@ class RemoteViewBossService:
                 source,
                 asyncio.Event(),  # streamer manages its own reconnect loop
             )
-
-        # The pipe pump runs on the same asyncio loop as the streamer via
-        # run_in_executor (blocking named-pipe reads), so no cross-thread queue
-        # juggling is needed.
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(self._run_until_stop(loop, frame_queue, run_stream()))
-        finally:
-            loop.close()
-
-    async def _run_until_stop(self, loop, frame_queue, stream_coro):
-        """Run the pipe pump + streamer together until stop_event is set."""
-        pump_task = asyncio.ensure_future(self._pipe_pump(loop, frame_queue))
-        stream_task = asyncio.ensure_future(stream_coro)
-        while not self._stop_event.is_set():
-            if stream_task.done():
-                break
+        )
+        # Poll the stop flag; also exit if the stream task ends unexpectedly.
+        while not self._stop.is_set() and not stream_task.done():
             await asyncio.sleep(0.25)
         pump_task.cancel()
         stream_task.cancel()
@@ -146,11 +116,11 @@ class RemoteViewBossService:
         """Create + accept the named pipe; read frames into frame_queue.
 
         Blocking named-pipe I/O is offloaded to a thread executor so it does not
-        stall the asyncio loop that drives the TLS streamer.
+        stall the asyncio loop driving the TLS streamer.
         """
         from daemon import pipe as pipe_mod
 
-        while not self._stop_event.is_set():
+        while not self._stop.is_set():
             handle = await loop.run_in_executor(None, pipe_mod.create_server_handle)
             connected = await loop.run_in_executor(None, pipe_mod.accept_client, handle)
             if not connected:
@@ -158,7 +128,7 @@ class RemoteViewBossService:
                 await asyncio.sleep(0.5)
                 continue
             print("[boss] Helper connected; reading frames", flush=True)
-            while not self._stop_event.is_set():
+            while not self._stop.is_set():
                 item = await loop.run_in_executor(
                     None, pipe_mod.read_frame_blocking, handle
                 )
@@ -176,10 +146,7 @@ class RemoteViewBossService:
 
 
 class _AsyncQueueSource:
-    """FrameSource bridging the pipe pump's asyncio.Queue to the streamer.
-
-    Interruptible get() so the stream loop ends promptly on stop.
-    """
+    """FrameSource bridging the pipe pump's asyncio.Queue to the streamer."""
 
     def __init__(self, queue: asyncio.Queue, stop_event: threading.Event):
         self._queue = queue
@@ -194,35 +161,58 @@ class _AsyncQueueSource:
         return None
 
 
+
 def build_service_class():
     """Assemble the concrete pywin32 service class (Windows only).
 
-    Mixes RemoteViewBossService with pywin32's win32serviceutil.ServiceFramework
-    and injects the win32service module reference used by SvcStop.
+    Mixes BossOrchestrator with pywin32's ServiceFramework and implements the
+    required lifecycle (__init__ / SvcStop / SvcDoRun).
     """
-    _servicemanager, _win32event, win32service, win32serviceutil = _load_win32service()
+    servicemanager, win32event, win32service, win32serviceutil = _load_win32service()
 
-    class RemoteViewWindowsService(RemoteViewBossService, win32serviceutil.ServiceFramework):
-        _win32service = win32service
+    class RemoteViewWindowsService(win32serviceutil.ServiceFramework, BossOrchestrator):
+        _svc_name_ = SERVICE_NAME
+        _svc_display_name_ = DISPLAY_NAME
+        _svc_description_ = SERVICE_DESCRIPTION
 
-        def SvcDoRun(self):
-            # ServiceFramework provides the SCM event handle plumbing.
-            self._stop_handle = _win32event.CreateEvent(None, 0, 0, None)
-            super().SvcDoRun()
+        def __init__(self, args):
+            # REQUIRED: initialize the pywin32 service framework first.
+            win32serviceutil.ServiceFramework.__init__(self, args)
+            # Stop event signalled by SvcStop; SvcDoRun waits on it.
+            self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
+            config_path = os.environ.get("REMOTEVIEW_CONFIG", "config.json")
+            BossOrchestrator.__init__(self, config_path)
 
         def SvcStop(self):
-            # Signal our stop event, then let the SCM know we're stopping.
-            if hasattr(self, "ReportServiceStatus"):
-                self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
-            self._stop_event.set()
+            # Tell the SCM we are stopping, then signal our stop event.
+            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+            win32event.SetEvent(self.hWaitStop)
+            self.stop()
+
+        def SvcDoRun(self):
+            servicemanager.LogMsg(
+                servicemanager.EVENTLOG_INFORMATION_TYPE,
+                servicemanager.PYS_SERVICE_STARTED,
+                (self._svc_name_, ""),
+            )
+            # Run the Boss work on a daemon thread so we can wait on hWaitStop
+            # here (the canonical pattern) and return promptly on stop.
+            work = threading.Thread(target=self.run, name="boss-run", daemon=True)
+            work.start()
+            self._threads.append(work)
+            win32event.WaitForSingleObject(self.hWaitStop, win32event.INFINITE)
+            self.stop()
+            work.join(timeout=10)
+            servicemanager.LogMsg(
+                servicemanager.EVENTLOG_INFORMATION_TYPE,
+                servicemanager.PYS_SERVICE_STOPPED,
+                (self._svc_name_, ""),
+            )
 
     return RemoteViewWindowsService
 
 
-
 if __name__ == "__main__":
-    # CLI dispatcher: install / start / stop / remove / debug.
-    # Usage: python -m daemon.service.windows <command>
     if not sys.platform.startswith("win"):
         print("daemon.service.windows is Windows-only.", file=sys.stderr)
         raise SystemExit(2)
@@ -236,6 +226,6 @@ if __name__ == "__main__":
         _sm.PrepareToHostSingleService(RemoteViewWindowsService)
         _sm.StartServiceCtrlDispatcher()
     else:
-        # Management command from an admin shell.
+        # Management command from an admin shell (install/start/stop/remove).
         win32serviceutil.HandleCommandLine(RemoteViewWindowsService)
 

@@ -103,6 +103,20 @@ python -m daemon.service.windows start
 
 Manage: `python -m daemon.service.windows stop|remove`, or use `services.msc`.
 
+### Before wiring two machines — run the Windows smoke test
+
+On the home Windows machine (Administrator prompt, from the project root):
+
+```bat
+pip install -r requirements.txt
+python tests\test_windows_smoke.py
+```
+
+This validates each Windows layer independently — pywin32/service class, the
+named-pipe transport round-trip, the active-session lookup, and that `mss` can
+capture the screen in your session — and tells you exactly which layer (if any)
+needs attention before you connect to the viewer machine.
+
 ## Security notes
 
 - TLS 1.3 enforced; the daemon pins the viewer's self-signed cert (rejects any
