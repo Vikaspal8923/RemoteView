@@ -75,6 +75,19 @@ def _b64d(text: str) -> bytes:
     return base64.b64decode(text.encode("ascii"))
 
 
+def _port_is_available(port: int, host: str = "0.0.0.0") -> tuple[bool, str]:
+    """Check a TCP listen port and return a user-facing reason if unavailable."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((host, port))
+        return True, ""
+    except OSError as exc:
+        return False, str(exc)
+    finally:
+        sock.close()
+
+
 # --------------------------------------------------------------------------- #
 # Host mode
 # --------------------------------------------------------------------------- #
@@ -176,6 +189,15 @@ def run_host(args) -> int:
     otp = os.urandom(crypto.OTP_SIZE)
     fp = crypto.cert_fingerprint(cert_path)
     pairing_port = args.viewer_port + 1
+    ok, reason = _port_is_available(pairing_port)
+    if not ok:
+        print(
+            f"error: pairing port {pairing_port} is busy ({reason}).\n"
+            f"Stop the old RemoteView host or choose another port with "
+            f"--viewer-port.",
+            file=sys.stderr,
+        )
+        return 1
     code = crypto.encode_pairing_code(host_ip, pairing_port, otp, fp)
 
     # The bundle the viewer downloads: cert + private key PEMs + config JSON.
@@ -201,7 +223,11 @@ def run_host(args) -> int:
     }
 
     # Start the one-shot pairing server.
-    httpd = HTTPServer(("0.0.0.0", pairing_port), _make_pairing_handler(state))
+    try:
+        httpd = HTTPServer(("0.0.0.0", pairing_port), _make_pairing_handler(state))
+    except OSError as exc:
+        print(f"error: could not listen on pairing port {pairing_port}: {exc}", file=sys.stderr)
+        return 1
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
 
@@ -279,6 +305,19 @@ def run_viewer(args) -> int:
     cert_path = os.path.join(certs_dir, "server.crt")
     key_path = os.path.join(certs_dir, "server.key")
     config_path = os.path.join(workdir, "config.json")
+
+    # Check before consuming the one-time pairing token. A stale viewer or
+    # another application otherwise causes a black window after pairing.
+    requested_port = args.viewer_port or (pairing_port - 1)
+    ok, reason = _port_is_available(requested_port)
+    if not ok:
+        print(
+            f"error: viewer port {requested_port} is busy ({reason}).\n"
+            "Close the existing RemoteView viewer or choose a different "
+            "viewer port with --viewer-port.",
+            file=sys.stderr,
+        )
+        return 1
 
     print(f"Connecting to pairing server at {host_ip}:{pairing_port} ...")
     try:
@@ -364,7 +403,7 @@ def main(argv=None) -> int:
         help="override the address the daemon will dial for streaming "
         "(host mode; default: the viewer's pairing source IP)",
     )
-    parser.add_argument("--viewer-port", type=int, default=9000, dest="viewer_port")
+    parser.add_argument("--viewer-port", type=int, default=None, dest="viewer_port")
     parser.add_argument("--frame-rate", type=int, default=10, dest="frame_rate")
     parser.add_argument("--quality", type=int, default=60)
     parser.add_argument("--monitor", type=int, default=0)
@@ -375,11 +414,15 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     if args.mode == "host":
+        if args.viewer_port is None:
+            args.viewer_port = 9000
         return run_host(args)
     if args.mode == "viewer":
         if not args.pair:
             print("error: --pair is required in viewer mode", file=sys.stderr)
             return 2
+        if args.viewer_port is None:
+            args.viewer_port = 9000
         return run_viewer(args)
     return 2
 
