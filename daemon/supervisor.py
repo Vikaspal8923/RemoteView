@@ -113,9 +113,19 @@ def launch_helper(cfg: Config) -> int:
     session_id = get_active_session_id()
     primary_token = _build_user_primary_token(mods, session_id)
 
+    # pythonservice.exe hosts the Boss when it is running as a pywin32 service.
+    # It is not a normal Python interpreter, so using sys.executable here
+    # launches the Helper with the service host and it exits immediately. Use
+    # the real interpreter from the same Python installation instead.
+    python_exe = getattr(sys, "_base_executable", None) or sys.executable
+    if os.path.basename(python_exe).lower() == "pythonservice.exe":
+        python_exe = os.path.join(os.path.dirname(python_exe), "python.exe")
+    if not os.path.isfile(python_exe):
+        raise SupervisorError(f"Python interpreter not found: {python_exe}")
+
     # Command line for the Helper. Quote the config path in case of spaces.
     config_path = os.path.abspath(cfg.config_path or "config.json")
-    cmd = f'"{sys.executable}" -m daemon.main --config "{config_path}" --worker'
+    cmd = f'"{python_exe}" -m daemon.main --config "{config_path}" --worker'
 
     # The project root is the parent of the daemon package. The Helper runs
     # `python -m daemon.main`, which needs this dir on sys.path -- otherwise the
