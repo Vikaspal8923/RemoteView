@@ -13,7 +13,7 @@ Host mode:
   * installs + starts the OS service (Linux/macOS; on Windows prints the
     admin install/start commands)
   * starts a temporary pairing HTTP server on pairing_port (= viewer_port + 1)
-    serving the cert + config as a JSON bundle, protected by a one-time token
+    serving the cert + config as a JSON bundle, protected by the pairing token
   * prints the pairing code (RVEW-XXXX-...) and blocks until one viewer pulls
 
 Viewer mode:
@@ -111,12 +111,6 @@ def _make_pairing_handler(state):
                 self.send_response(403)
                 self.end_headers()
                 return
-            if state["served"]:
-                # One-time: only the first pull succeeds.
-                self.send_response(410)
-                self.end_headers()
-                return
-
             # Record the viewer's address: taken from the source IP of this
             # pull (overridable with --viewer-ip for NAT/VPN setups). It goes
             # into both the served bundle and the host's config.json, because
@@ -141,6 +135,7 @@ def _make_pairing_handler(state):
                     pass  # pairing still succeeds; daemon validates at start
 
             state["served"] = True
+            state["pull_count"] = state.get("pull_count", 0) + 1
             state["served_ip"] = viewer_ip
             body = json.dumps(resp).encode("utf-8")
             self.send_response(200)
@@ -218,6 +213,7 @@ def run_host(args) -> int:
         "otp": otp,
         "bundle": bundle,
         "served": False,
+        "pull_count": 0,
         "config_path": config_path,
         "viewer_ip_override": args.viewer_ip,
     }
@@ -244,9 +240,10 @@ def run_host(args) -> int:
     # Install + start the OS service (best-effort; may need sudo).
     _install_service(config_path)
 
-    print("Waiting for a viewer to pull the bundle (Ctrl-C to cancel)...")
+    print("Pairing code remains reusable while this window is open.")
+    print("Waiting for viewers (Ctrl-C to finish)...")
     try:
-        while not state["served"]:
+        while True:
             time.sleep(0.5)
     except KeyboardInterrupt:
         print("\nCancelled.")
@@ -254,9 +251,9 @@ def run_host(args) -> int:
         httpd.shutdown()
 
     if state["served"]:
-        print("✓ Viewer paired. The one-time token is now invalid.")
+        print(f"✓ Pairing completed ({state.get('pull_count', 0)} pull(s)).")
         print(f"✓ Viewer address recorded in config.json: {state.get('served_ip')}")
-        print("  (If the service is already installed, restart it so it reloads.)")
+        print("  Pairing remains available only while this host window is open.")
     return 0
 
 

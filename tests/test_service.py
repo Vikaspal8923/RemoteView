@@ -181,8 +181,8 @@ def test_host_viewer_pairing_flow():
         print("  ok: host->viewer pairing flow (bundle pulled, fp verified, viewer_ip captured, key shipped)")
 
 
-def test_one_time_token_invalidated():
-    """After the first pull, the OTP no longer works (410)."""
+def test_pairing_token_reusable_while_host_is_running():
+    """The pairing code can be reused while the host pairing server runs."""
     import http.client
     with tempfile.TemporaryDirectory() as d:
         cert_path = os.path.join(d, "c.crt")
@@ -204,7 +204,7 @@ def test_one_time_token_invalidated():
         c2 = http.client.HTTPConnection("127.0.0.1", 9101, timeout=5)
         c2.request("GET", f"/bundle?token={otp.hex()}")
         r2 = c2.getresponse(); r2.read(); c2.close()
-        assert r2.status == 410  # gone: one-time token invalidated
+        assert r2.status == 200
 
         httpd.shutdown()
         print("  ok: one-time token invalidated after first pull")
@@ -280,7 +280,7 @@ def main():
     test_windows_relative_tls_paths_resolve_against_config_dir()
     test_windows_module_puts_project_root_on_path()
     test_host_viewer_pairing_flow()
-    test_one_time_token_invalidated()
+    test_pairing_token_reusable_while_host_is_running()
     print("\nAll Phase 2 tests passed.")
 
 
