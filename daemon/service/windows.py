@@ -394,7 +394,12 @@ if __name__ == "__main__":
         raise SystemExit(2)
 
     _sm, _we, _ws, win32serviceutil = _load_win32service()
+    # HandleCommandLine/debug resolves the service class by looking it up on
+    # the imported module.  A local variable is not enough: without exporting
+    # this name, pywin32 reports "module 'windows' has no attribute
+    # 'RemoteViewWindowsService'" and the service exits before SvcDoRun.
     RemoteViewWindowsService = build_service_class()
+    globals()["RemoteViewWindowsService"] = RemoteViewWindowsService
 
     if len(sys.argv) == 1:
         # Started by the SCM: hand control to pywin32's service dispatcher.
