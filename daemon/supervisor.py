@@ -11,9 +11,10 @@ see the screen. This module implements the Microsoft-recommended launch pattern:
     CreateEnvironmentBlock(...)      -> build the user's environment
     CreateProcessAsUser(...)         -> start the Helper in that session
 
-The Helper writes frames to a named pipe (see daemon/pipe.py) that the Boss
-reads. If the Helper exits (killed by the user or a crash), the Boss restarts
-it after a short delay -- the auto-respawn backstop discussed with the user.
+The Helper streams frames over an authenticated loopback socket (see
+daemon/transport.py) that the Boss reads. If the Helper exits (killed by the
+user or a crash), the Boss restarts it after a short delay -- the auto-respawn
+backstop discussed with the user.
 The Boss itself holds the auth token + TLS and is un-killable by a normal user.
 
 All Windows imports are lazy so this module imports cleanly on Linux/macOS

@@ -1,7 +1,7 @@
 """Tests for the Phase 2 service/setup layer.
 
 Cross-platform parts are tested on Linux:
-  * pipe.build_pipe_sddl / PIPE_SDDL shape
+  * transport: loopback socket round-trip + auth (the Boss<->Helper channel)
   * linux.render_unit contents (root, Restart=always, visible)
   * macos.render_plist contents
   * The full host -> viewer pairing flow over real localhost HTTP:
@@ -21,18 +21,78 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared import crypto
-from daemon import pipe as pipe_mod
+from daemon import transport as transport_mod
 from daemon.service import linux as linux_svc
 from daemon.service import macos as macos_svc
 import setup as setup_mod
 
 
-def test_pipe_sddl():
-    sddl = pipe_mod.build_pipe_sddl()
-    assert sddl.startswith("D:")
-    assert "SY" in sddl  # SYSTEM (Boss) access
-    assert "AU" in sddl  # Authenticated Users (Helper) write access
-    print("  ok: pipe SDDL grants SYSTEM + Authenticated Users")
+def test_loopback_transport_roundtrip():
+    """Boss(server) <-> Helper(client) over a loopback socket, with auth."""
+    server_ready = threading.Event()
+    received = {}
+    token = crypto.generate_auth_token()
+
+    def server():
+        listen_sock = transport_mod.create_server()
+        server_ready.set()
+        conn = transport_mod.accept_client(listen_sock)
+        if conn is not None and transport_mod.server_authenticate(conn, token):
+            received["frame"] = transport_mod.read_frame_blocking(conn)
+        transport_mod.close_handle(conn)
+        transport_mod.close_handle(listen_sock)
+
+    t = threading.Thread(target=server, daemon=True)
+    t.start()
+    server_ready.wait(timeout=5)
+    time.sleep(0.2)
+
+    sock = transport_mod.connect_client()
+    assert transport_mod.client_authenticate(sock, token), "client auth failed"
+    writer = transport_mod.FrameSocketWriter(sock)
+    payload = os.urandom(4096)
+    ts = 987654321
+    writer.put(payload, ts)
+    writer.close()
+
+    t.join(timeout=5)
+    assert received.get("frame") is not None, "no frame received on the socket"
+    got_payload, got_ts = received["frame"]
+    assert got_payload == payload
+    assert got_ts == ts
+    print("  ok: loopback transport round-trip (auth + framed frames)")
+
+
+def test_loopback_transport_rejects_bad_token():
+    """A client with the wrong token must be rejected and get no frames."""
+    server_ready = threading.Event()
+    received = {}
+    good_token = crypto.generate_auth_token()
+    bad_token = crypto.generate_auth_token()
+
+    def server():
+        listen_sock = transport_mod.create_server()
+        server_ready.set()
+        conn = transport_mod.accept_client(listen_sock)
+        # Auth should fail; do not read frames.
+        if conn is not None and transport_mod.server_authenticate(conn, good_token):
+            received["frame"] = transport_mod.read_frame_blocking(conn)
+        transport_mod.close_handle(conn)
+        transport_mod.close_handle(listen_sock)
+
+    t = threading.Thread(target=server, daemon=True)
+    t.start()
+    server_ready.wait(timeout=5)
+    time.sleep(0.2)
+
+    sock = transport_mod.connect_client()
+    ok = transport_mod.client_authenticate(sock, bad_token)
+    assert ok is False, "bad token must be rejected"
+    transport_mod.close_handle(sock)
+    t.join(timeout=5)
+    assert "frame" not in received, "no frames should flow after failed auth"
+    print("  ok: loopback transport rejects a wrong token")
+
 
 
 def test_render_unit():
@@ -136,7 +196,8 @@ def test_one_time_token_invalidated():
 
 def main():
     print("Running Phase 2 (service/setup) tests:")
-    test_pipe_sddl()
+    test_loopback_transport_roundtrip()
+    test_loopback_transport_rejects_bad_token()
     test_render_unit()
     test_render_plist()
     test_host_viewer_pairing_flow()

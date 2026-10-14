@@ -15,16 +15,17 @@ See `RemoteViewDesign.md` for the full design.
 - **Phase 2 (done, code):** Windows Service layer (un-killable Session-0 "Boss"
   + per-session capture "Helper" with auto-respawn), Linux systemd unit, macOS
   launchd, and `setup.py` host/viewer pairing. Cross-platform parts are tested
-  here; the **Windows-specific runtime** (pywin32 service, `CreateProcessAsUser`
-  session launch, named pipe) is written to Microsoft's documented pattern and
-  **must be run on a Windows host** — it cannot be executed on this Linux box.
+  here (the loopback Boss↔Helper transport is tested for real on Linux); the
+  **Windows-specific runtime** (pywin32 service, `CreateProcessAsUser` session
+  launch) is written to Microsoft's documented pattern and **must be run on a
+  Windows host** — it cannot be executed on this Linux box.
 
 ## Layout
 
 ```
 shared/    config.py, crypto.py (TLS + tokens + pairing), protocol.py (frames)
 daemon/    capture.py (mss→JPEG), streamer.py (TLS+auth+reconnect), main.py
-           pipe.py (named-pipe transport), supervisor.py (session launch+respawn)
+           transport.py (loopback Boss<->Helper socket), supervisor.py (session launch+respawn)
            service/ windows.py (Boss service), linux.py (systemd), macos.py (launchd)
 viewer/    receiver.py (TLS listener+auth), display.py (tkinter), main.py
 tests/     test_shared.py, test_e2e.py, test_service.py
@@ -90,8 +91,9 @@ cannot see the interactive desktop):
   normal-user process **cannot stop it** (only an admin can: services.msc,
   `sc stop RemoteViewDaemon`, Task Manager → Services). It has no window.
 - **Helper** — a no-window process launched into your login session via
-  `CreateProcessAsUser`; it captures the screen and writes frames to the Boss
-  over an ACL-gated named pipe. If killed, the Boss respawns it in ~1s.
+  `CreateProcessAsUser`; it captures the screen and streams frames to the Boss
+  over a **loopback socket** (127.0.0.1, authenticated with the shared token).
+  If killed, the Boss respawns it in ~1s.
 
 Install on the home machine (run as Administrator):
 
@@ -113,9 +115,9 @@ python tests\test_windows_smoke.py
 ```
 
 This validates each Windows layer independently — pywin32/service class, the
-named-pipe transport round-trip, the active-session lookup, and that `mss` can
-capture the screen in your session — and tells you exactly which layer (if any)
-needs attention before you connect to the viewer machine.
+loopback frame transport (auth + round-trip), the active-session lookup, and
+that `mss` can capture the screen in your session — and tells you exactly which
+layer (if any) needs attention before you connect to the viewer machine.
 
 ## Security notes
 

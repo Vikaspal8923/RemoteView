@@ -3,7 +3,7 @@
 Runs as a registered Windows Service under LocalSystem in Session 0. It:
   1. supervises the capture Helper (launched into the user's session,
      respawned on death),
-  2. creates the named-pipe frame server and reads JPEG frames from the Helper,
+  2. accepts the Helper on a loopback socket and reads JPEG frames from it,
   3. bridges those frames into the asyncio streamer, which owns the auth token
      + TLS and dials out to the viewer.
 
@@ -90,7 +90,7 @@ class BossOrchestrator:
     async def _run_until_stop(self, loop, frame_queue, source, cfg):
         from daemon import streamer as streamer_mod
 
-        pump_task = asyncio.ensure_future(self._pipe_pump(loop, frame_queue))
+        pump_task = asyncio.ensure_future(self._frame_pump(loop, frame_queue, cfg))
         stream_task = asyncio.ensure_future(
             streamer_mod.stream_frames(
                 cfg.viewer_ip,
@@ -112,25 +112,36 @@ class BossOrchestrator:
             except asyncio.CancelledError:
                 pass
 
-    async def _pipe_pump(self, loop, frame_queue: asyncio.Queue):
-        """Create + accept the named pipe; read frames into frame_queue.
+    async def _frame_pump(self, loop, frame_queue: asyncio.Queue, cfg):
+        """Create + accept the loopback socket; read frames into frame_queue.
 
-        Blocking named-pipe I/O is offloaded to a thread executor so it does not
-        stall the asyncio loop driving the TLS streamer.
+        Blocking socket I/O is offloaded to a thread executor so it does not
+        stall the asyncio loop driving the TLS streamer. The Helper must present
+        the shared auth token before any frames are accepted.
         """
-        from daemon import pipe as pipe_mod
+        from daemon import transport as transport_mod
 
         while not self._stop.is_set():
-            handle = await loop.run_in_executor(None, pipe_mod.create_server_handle)
-            connected = await loop.run_in_executor(None, pipe_mod.accept_client, handle)
-            if not connected:
-                pipe_mod.close_handle(handle)
-                await asyncio.sleep(0.5)
+            listen_sock = await loop.run_in_executor(None, transport_mod.create_server)
+            conn = await loop.run_in_executor(None, transport_mod.accept_client, listen_sock)
+            if conn is None:
+                transport_mod.close_handle(listen_sock)
+                await asyncio.sleep(0.25)
                 continue
-            print("[boss] Helper connected; reading frames", flush=True)
+            # Authenticate the Helper before reading any frames.
+            authed = await loop.run_in_executor(
+                None, transport_mod.server_authenticate, conn, cfg.auth_token
+            )
+            if not authed:
+                print("[boss] Helper failed auth; dropping", flush=True)
+                transport_mod.close_handle(conn)
+                transport_mod.close_handle(listen_sock)
+                await asyncio.sleep(0.25)
+                continue
+            print("[boss] Helper connected + authenticated; reading frames", flush=True)
             while not self._stop.is_set():
                 item = await loop.run_in_executor(
-                    None, pipe_mod.read_frame_blocking, handle
+                    None, transport_mod.read_frame_blocking, conn
                 )
                 if item is None:
                     print("[boss] Helper disconnected", flush=True)
@@ -142,7 +153,8 @@ class BossOrchestrator:
                     except asyncio.QueueEmpty:
                         pass
                 frame_queue.put_nowait((payload, ts_ms))
-            pipe_mod.close_handle(handle)
+            transport_mod.close_handle(conn)
+            transport_mod.close_handle(listen_sock)
 
 
 class _AsyncQueueSource:

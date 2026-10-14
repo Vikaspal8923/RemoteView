@@ -5,8 +5,9 @@ connection to the viewer (which listens). This means no inbound firewall rules
 are needed on the home machine.
 
 The streamer is transport-agnostic on the frame side: it pulls frames from a
-``FrameSource`` (an asyncio.Queue on Linux; a named-pipe reader inside the
-Windows Boss). It owns the auth token + TLS and the reconnect logic.
+``FrameSource`` (an asyncio.Queue on Linux; a loopback-socket frame queue
+adapter inside the Windows Boss). It owns the auth token + TLS and the
+reconnect logic.
 
 Wire handshake (after TLS):
     Daemon  --[32-byte HMAC token]-->  Viewer

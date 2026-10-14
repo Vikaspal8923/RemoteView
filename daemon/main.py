@@ -28,31 +28,38 @@ from daemon import streamer as streamer_mod
 
 
 def _run_worker(cfg: Config) -> int:
-    """Helper mode (Windows): capture the screen, write frames to the pipe.
+    """Helper mode: capture the screen, write frames to the Boss's socket.
 
     Runs in the interactive user's session with no window. Connects to the
-    Boss's named-pipe server (retrying until it is up), then streams captured
-    JPEG frames to it via the synchronous PipeFrameWriter sink.
+    Boss's loopback socket (retrying until it is up), authenticates with the
+    shared token, then streams captured JPEG frames to it via the synchronous
+    FrameSocketWriter sink.
     """
     import time
 
     from daemon import capture as capture_mod
-    from daemon import pipe as pipe_mod
+    from daemon import transport as transport_mod
 
-    # Connect to the Boss's pipe, retrying -- the Boss may still be starting.
-    handle = None
+    # Connect to the Boss's socket, retrying -- the Boss may still be starting.
+    sock = None
     for _ in range(30):
         try:
-            handle = pipe_mod.connect_client_handle()
+            sock = transport_mod.connect_client()
             break
-        except Exception:
+        except OSError:
             time.sleep(0.5)
-    if handle is None:
-        print("[worker] could not connect to Boss pipe; exiting", file=sys.stderr)
+    if sock is None:
+        print("[worker] could not connect to Boss socket; exiting", file=sys.stderr)
         return 3
 
-    print("[worker] connected to Boss pipe; capturing", flush=True)
-    sink = pipe_mod.PipeFrameWriter(handle)
+    # Authenticate before streaming any frames.
+    if not transport_mod.client_authenticate(sock, cfg.auth_token):
+        print("[worker] Boss rejected our token; exiting", file=sys.stderr)
+        transport_mod.close_handle(sock)
+        return 4
+
+    print("[worker] connected + authenticated to Boss; capturing", flush=True)
+    sink = transport_mod.FrameSocketWriter(sock)
     stop_event = asyncio.Event()
     cap_cfg = capture_mod.CaptureConfig(
         frame_rate=cfg.frame_rate, quality=cfg.quality, monitor=cfg.monitor
@@ -112,8 +119,8 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument(
         "--worker",
         action="store_true",
-        help="capture-only Helper mode: read the screen, write frames to the "
-        "Boss's named pipe (Windows per-user session)",
+        help="capture-only Helper mode: read the screen, stream frames to the "
+        "Boss's loopback socket (runs in the user session)",
     )
     args = parser.parse_args(argv)
 

@@ -1,7 +1,7 @@
 """Windows smoke tests -- RUN THIS ON THE HOME WINDOWS MACHINE.
 
 The Windows-specific runtime (pywin32 service, CreateProcessAsUser session
-launch, named-pipe transport) cannot be exercised on Linux, so this script
+launch, loopback-socket transport) cannot be exercised on Linux, so this script
 lets you validate each layer independently on the actual target before wiring
 up two machines. Run in an Administrator prompt from the project root:
 
@@ -9,8 +9,8 @@ up two machines. Run in an Administrator prompt from the project root:
 
 It checks, in order:
     1. pywin32 is importable and the service class builds.
-    2. The named-pipe frame transport round-trips (server <-> client) in one
-       process (validates pipe.py + framing without needing the service).
+    2. The loopback frame transport round-trips (server <-> client) in one
+       process (validates transport.py + framing without needing the service).
     3. The Boss can find the active console session (WTSGetActiveConsoleSessionId).
     4. Capture works in THIS session (mss) -- proves screen capture is possible.
 
@@ -55,35 +55,38 @@ def _test_service_class():
     assert hasattr(cls, "SvcDoRun") and hasattr(cls, "SvcStop")
 
 
-@check("named-pipe frame transport round-trip (pipe.py)")
-def _test_pipe_roundtrip():
-    from daemon import pipe as pipe_mod
-    from shared import protocol as proto
+@check("loopback frame transport round-trip (transport.py)")
+def _test_socket_roundtrip():
+    from daemon import transport as transport_mod
 
     server_ready = threading.Event()
     received = {}
+    token = "ab" * 32
 
     def server():
-        handle = pipe_mod.create_server_handle()
+        listen_sock = transport_mod.create_server()
         server_ready.set()
-        if pipe_mod.accept_client(handle):
-            received["frame"] = pipe_mod.read_frame_blocking(handle)
-        pipe_mod.close_handle(handle)
+        conn = transport_mod.accept_client(listen_sock)
+        if conn is not None and transport_mod.server_authenticate(conn, token):
+            received["frame"] = transport_mod.read_frame_blocking(conn)
+        transport_mod.close_handle(conn)
+        transport_mod.close_handle(listen_sock)
 
     t = threading.Thread(target=server, daemon=True)
     t.start()
     server_ready.wait(timeout=5)
-    time.sleep(0.2)  # let the pipe be ready to connect
+    time.sleep(0.2)  # let the listener bind
 
-    handle = pipe_mod.connect_client_handle()
-    writer = pipe_mod.PipeFrameWriter(handle)
+    sock = transport_mod.connect_client()
+    assert transport_mod.client_authenticate(sock, token), "client auth failed"
+    writer = transport_mod.FrameSocketWriter(sock)
     payload = b"JPEGTESTDATA" * 100
     ts = 123456789
     writer.put(payload, ts)
     writer.close()
 
     t.join(timeout=5)
-    assert received.get("frame") is not None, "no frame received on the pipe"
+    assert received.get("frame") is not None, "no frame received on the socket"
     got_payload, got_ts = received["frame"]
     assert got_payload == payload
     assert got_ts == ts

@@ -6,7 +6,7 @@ timestamp_ms)`` into an asyncio.Queue. Respects ``frame_rate`` (capture FPS).
 
 This module is transport-agnostic: it fills a frame *sink*. On Linux the sink
 is an asyncio.Queue feeding the in-process streamer; on Windows the sink is a
-named-pipe writer feeding the Session-0 Boss. See daemon/main.py.
+loopback-socket writer feeding the Session-0 Boss. See daemon/main.py.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import mss.tools
 from PIL import Image
 
 # A frame sink accepts (frame_bytes, timestamp_ms) via a *synchronous* put().
-# Both the asyncio.Queue adapter (Linux) and the Windows named-pipe transport
+# Both the asyncio.Queue adapter (Linux) and the Windows socket transport writer
 # implement this synchronous contract -- capture_loop never awaits the sink.
 class FrameSink(Protocol):
     def put(self, frame_bytes: bytes, timestamp_ms: int) -> None: ...
