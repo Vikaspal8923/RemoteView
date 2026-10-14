@@ -40,6 +40,10 @@ class ViewerDisplay:
 
         # Stats for the title bar.
         self._last_latency_ms: Optional[int] = None
+        # Windows and Linux clocks may differ by seconds. Calibrate the wall
+        # clock offset on the first frame so the title does not report a huge
+        # fake latency caused by unsynchronised system clocks.
+        self._clock_offset_ms: Optional[int] = None
         self._fps_ema: Optional[float] = None
         self._last_frame_time: Optional[float] = None
         self._frames_since_update = 0
@@ -89,7 +93,9 @@ class ViewerDisplay:
         now_ms = int(now * 1000)
 
         # Latency = now - capture time. Clamp tiny negatives (clock skew).
-        latency = max(0, now_ms - ts_ms)
+        if self._clock_offset_ms is None:
+            self._clock_offset_ms = now_ms - ts_ms
+        latency = max(0, now_ms - ts_ms - self._clock_offset_ms)
         self._last_latency_ms = latency
 
         # FPS via exponential moving average of inter-frame time.
@@ -101,12 +107,22 @@ class ViewerDisplay:
         self._last_frame_time = now
         self._frames_since_update += 1
 
-        # Convert to PhotoImage and draw.
-        self._photo = ImageTk.PhotoImage(img)
         cw = self.canvas.winfo_width()
         ch = self.canvas.winfo_height()
         if cw <= 1 or ch <= 1:
             cw, ch = img.width, img.height
+
+        # Fit the stream to the viewer window while preserving the source
+        # aspect ratio. Do this on the already-downscaled frame so the viewer
+        # remains responsive even when the window is large.
+        scale = min(cw / img.width, ch / img.height)
+        draw_w = max(1, int(img.width * scale))
+        draw_h = max(1, int(img.height * scale))
+        if draw_w != img.width or draw_h != img.height:
+            img = img.resize((draw_w, draw_h), Image.Resampling.BILINEAR)
+
+        # Convert to PhotoImage and draw.
+        self._photo = ImageTk.PhotoImage(img)
         if self._canvas_img_id is None:
             self._canvas_img_id = self.canvas.create_image(
                 cw // 2, ch // 2, image=self._photo, anchor=tk.CENTER
