@@ -34,8 +34,8 @@ class Config:
     tls_key: str = "certs/server.key"  # daemon only; never shipped to viewer
 
     # --- Capture (daemon only) ---
-    frame_rate: int = 10           # capture FPS (5-30 recommended)
-    quality: int = 60              # JPEG quality 1-95
+    frame_rate: int = 5            # capture FPS (low-latency default)
+    quality: int = 45              # JPEG quality 1-95 (low-latency default)
     monitor: int = 0               # 0 = primary monitor
     max_width: int = 1280          # stream downscale limit; 0 = native width
     max_height: int = 720          # stream downscale limit; 0 = native height
@@ -67,8 +67,8 @@ class Config:
             auth_token=raw.get("auth_token", ""),
             tls_cert=raw.get("tls_cert", "certs/server.crt"),
             tls_key=raw.get("tls_key", "certs/server.key"),
-            frame_rate=raw.get("frame_rate", 10),
-            quality=raw.get("quality", 60),
+            frame_rate=raw.get("frame_rate", 5),
+            quality=raw.get("quality", 45),
             monitor=raw.get("monitor", 0),
             max_width=raw.get("max_width", 1280),
             max_height=raw.get("max_height", 720),

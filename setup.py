@@ -400,8 +400,8 @@ def main(argv=None) -> int:
         "(host mode; default: the viewer's pairing source IP)",
     )
     parser.add_argument("--viewer-port", type=int, default=None, dest="viewer_port")
-    parser.add_argument("--frame-rate", type=int, default=10, dest="frame_rate")
-    parser.add_argument("--quality", type=int, default=60)
+    parser.add_argument("--frame-rate", type=int, default=5, dest="frame_rate")
+    parser.add_argument("--quality", type=int, default=45)
     parser.add_argument("--monitor", type=int, default=0)
     parser.add_argument("--max-width", type=int, default=1280,
                         help="maximum streamed width (default: 1280)")

@@ -58,7 +58,7 @@ class QueueFrameSink:
 class CaptureConfig:
     """Minimal capture settings pulled from the shared Config."""
 
-    def __init__(self, frame_rate: int = 10, quality: int = 60, monitor: int = 0,
+    def __init__(self, frame_rate: int = 5, quality: int = 45, monitor: int = 0,
                  max_width: int = 1280, max_height: int = 720):
         self.frame_rate = frame_rate
         self.quality = quality
