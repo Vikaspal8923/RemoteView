@@ -139,6 +139,7 @@ class BossOrchestrator:
         from daemon import supervisor as supervisor_mod
 
         cfg = _apply_config_dir(Config.load(self._config_path), self._config_path)
+        self._log(f"starting with config={self._config_path}, viewer={cfg.viewer_ip}:{cfg.viewer_port}")
 
         # 1. Supervisor thread: keep the Helper alive in the user session.
         sup_thread = threading.Thread(
@@ -163,6 +164,20 @@ class BossOrchestrator:
             except Exception:
                 pass
 
+    def _log(self, message: str) -> None:
+        """Write diagnostics somewhere useful when the service has no console."""
+        line = f"[{__import__('datetime').datetime.now().isoformat(timespec='seconds')}] {message}\n"
+        try:
+            path = os.path.join(os.path.dirname(os.path.abspath(self._config_path)), "remoteview-service.log")
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(line)
+        except Exception:
+            pass
+        try:
+            print(f"[boss] {message}", flush=True)
+        except Exception:
+            pass
+
     def stop(self) -> None:
         self._stop.set()
 
@@ -170,19 +185,52 @@ class BossOrchestrator:
         from daemon import streamer as streamer_mod
 
         pump_task = asyncio.ensure_future(self._frame_pump(loop, frame_queue, cfg))
-        stream_task = asyncio.ensure_future(
-            streamer_mod.stream_frames(
-                cfg.viewer_ip,
-                cfg.viewer_port,
-                cfg.auth_token,
-                cfg.tls_cert,
-                source,
-                asyncio.Event(),  # streamer manages its own reconnect loop
+        stream_stop = asyncio.Event()
+
+        def start_stream(current_cfg):
+            return asyncio.ensure_future(
+                streamer_mod.stream_frames(
+                    current_cfg.viewer_ip,
+                    current_cfg.viewer_port,
+                    current_cfg.auth_token,
+                    current_cfg.tls_cert,
+                    source,
+                    stream_stop,
+                )
             )
-        )
+
+        stream_task = start_stream(cfg)
+        try:
+            config_mtime = os.path.getmtime(self._config_path)
+        except OSError:
+            config_mtime = None
         # Poll the stop flag; also exit if the stream task ends unexpectedly.
         while not self._stop.is_set() and not stream_task.done():
             await asyncio.sleep(0.25)
+            try:
+                new_mtime = os.path.getmtime(self._config_path)
+            except OSError:
+                new_mtime = config_mtime
+            if config_mtime is not None and new_mtime != config_mtime:
+                # setup.py rewrites viewer_ip after pairing. Reload it in the
+                # already-running service so a manual restart is unnecessary.
+                config_mtime = new_mtime
+                from shared.config import Config
+                new_cfg = _apply_config_dir(Config.load(self._config_path), self._config_path)
+                self._log(f"config changed; reconnecting viewer={new_cfg.viewer_ip}:{new_cfg.viewer_port}")
+                stream_stop.set()
+                stream_task.cancel()
+                try:
+                    await stream_task
+                except asyncio.CancelledError:
+                    pass
+                stream_stop = asyncio.Event()
+                stream_task = start_stream(new_cfg)
+        if stream_task.done() and not self._stop.is_set():
+            # Do not silently turn a crashed streamer into a clean service exit.
+            # The service wrapper records this exception in the Event Log and
+            # status then reports the real failure instead of an unexplained 1.
+            stream_task.result()
         pump_task.cancel()
         stream_task.cancel()
         for t in (pump_task, stream_task):
@@ -201,16 +249,25 @@ class BossOrchestrator:
         from daemon import transport as transport_mod
 
         while not self._stop.is_set():
-            listen_sock = await loop.run_in_executor(None, transport_mod.create_server)
+            try:
+                listen_sock = await loop.run_in_executor(None, transport_mod.create_server)
+            except OSError as exc:
+                self._log(f"frame channel bind failed: {exc!r}")
+                await asyncio.sleep(1.0)
+                continue
             conn = await loop.run_in_executor(None, transport_mod.accept_client, listen_sock)
             if conn is None:
                 transport_mod.close_handle(listen_sock)
                 await asyncio.sleep(0.25)
                 continue
             # Authenticate the Helper before reading any frames.
-            authed = await loop.run_in_executor(
-                None, transport_mod.server_authenticate, conn, cfg.auth_token
-            )
+            try:
+                authed = await loop.run_in_executor(
+                    None, transport_mod.server_authenticate, conn, cfg.auth_token
+                )
+            except Exception as exc:
+                self._log(f"helper authentication error: {exc!r}")
+                authed = False
             if not authed:
                 print("[boss] Helper failed auth; dropping", flush=True)
                 transport_mod.close_handle(conn)
@@ -219,9 +276,13 @@ class BossOrchestrator:
                 continue
             print("[boss] Helper connected + authenticated; reading frames", flush=True)
             while not self._stop.is_set():
-                item = await loop.run_in_executor(
-                    None, transport_mod.read_frame_blocking, conn
-                )
+                try:
+                    item = await loop.run_in_executor(
+                        None, transport_mod.read_frame_blocking, conn
+                    )
+                except Exception as exc:
+                    self._log(f"helper frame read error: {exc!r}")
+                    break
                 if item is None:
                     print("[boss] Helper disconnected", flush=True)
                     break
@@ -304,6 +365,7 @@ def build_service_class():
                 except Exception as exc:  # noqa: BLE001
                     unexpected = True
                     reason = f"crashed: {exc!r}"
+                    self._log(reason)
                 if unexpected:
                     try:
                         servicemanager.LogErrorMsg(f"{self._svc_name_}: {reason}")
