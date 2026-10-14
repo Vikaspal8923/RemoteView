@@ -388,6 +388,15 @@ def build_service_class():
     return RemoteViewWindowsService
 
 
+# When pythonservice.exe loads this file from the SCM, it imports it as the
+# top-level module ``windows``; ``__name__ == '__main__'`` is false in that
+# process.  Export the class during normal Windows module import as well as
+# during CLI management commands, otherwise pywin32 cannot resolve the
+# PythonClass registry value and the service exits immediately.
+if sys.platform.startswith("win"):
+    RemoteViewWindowsService = build_service_class()
+
+
 if __name__ == "__main__":
     if not sys.platform.startswith("win"):
         print("daemon.service.windows is Windows-only.", file=sys.stderr)
@@ -398,7 +407,8 @@ if __name__ == "__main__":
     # the imported module.  A local variable is not enough: without exporting
     # this name, pywin32 reports "module 'windows' has no attribute
     # 'RemoteViewWindowsService'" and the service exits before SvcDoRun.
-    RemoteViewWindowsService = build_service_class()
+    if "RemoteViewWindowsService" not in globals():
+        RemoteViewWindowsService = build_service_class()
     globals()["RemoteViewWindowsService"] = RemoteViewWindowsService
 
     if len(sys.argv) == 1:
