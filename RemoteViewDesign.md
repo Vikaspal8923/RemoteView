@@ -339,3 +339,93 @@ pywin32>=306       # Windows only
 - Audio streaming (future)
 - Mobile viewer (future)
 - Web-based viewer (future)
+
+## Next Goal — Limited Keyboard and Mouse Control
+
+The next feature will add optional remote control while keeping RemoteView
+strictly limited to screen monitoring plus keyboard and mouse input. Audio,
+camera, clipboard, file transfer, shell commands, and process control remain
+out of scope.
+
+### Control architecture
+
+```text
+Linux Viewer
+  ├─ displays screen frames
+  ├─ captures local mouse/keyboard events
+  └─ sends authenticated control commands over TLS
+             ↓
+Windows Boss service
+  ├─ authenticates and validates commands
+  └─ forwards commands to the Helper
+             ↓
+Windows Helper in the logged-in user session
+  └─ performs input through the Windows SendInput API
+```
+
+The Boss must not inject input directly. It runs in Session 0, while the
+Helper runs in the user’s interactive desktop session. The Helper is therefore
+the only component allowed to call `SendInput`.
+
+### Allowed command types
+
+Only these control messages are planned:
+
+```text
+MOUSE_MOVE
+MOUSE_BUTTON_DOWN
+MOUSE_BUTTON_UP
+MOUSE_SCROLL
+KEY_DOWN
+KEY_UP
+TYPE_TEXT
+```
+
+There will be no messages for shell execution, process termination, window
+management, clipboard access, file transfer, audio, or camera control.
+
+### Coordinate and keyboard model
+
+The viewer displays a scaled stream, so mouse positions will be sent as
+normalized coordinates:
+
+```text
+x: 0.0 .. 1.0
+y: 0.0 .. 1.0
+```
+
+The Windows Helper converts those values to the selected monitor’s actual
+pixel coordinates. Keyboard commands will use stable key names or validated
+Windows virtual-key identifiers, with separate key-down and key-up events.
+
+### Control state and safety
+
+Control is disabled by default. The viewer must show a clear state such as
+`MONITORING ONLY` or `REMOTE CONTROL ACTIVE`. The design requires:
+
+- explicit user confirmation before enabling control;
+- a visible enable/disable control on the viewer;
+- an emergency stop action;
+- automatic disable when the TLS connection drops;
+- release of all held keys and mouse buttons on disconnect;
+- validation of coordinates, key values, and event rates;
+- no control commands accepted before control is explicitly enabled;
+- logging of enable, disable, disconnect, and emergency-stop events.
+
+### Protocol direction
+
+The existing authenticated TLS connection will become bidirectional:
+
+```text
+Windows → Linux: frame packets
+Linux → Windows: validated control packets
+```
+
+Implementation will be staged as follows:
+
+1. Add control packet types and bidirectional transport tests.
+2. Add Windows Helper input injection behind a disabled-by-default flag.
+3. Add viewer mouse/keyboard event capture and coordinate mapping.
+4. Add explicit enable/disable UI and emergency stop behavior.
+5. Test disconnects, held keys, multiple monitors, locked screens, and
+   malformed or high-rate commands.
