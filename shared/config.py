@@ -37,6 +37,8 @@ class Config:
     frame_rate: int = 10           # capture FPS (5-30 recommended)
     quality: int = 60              # JPEG quality 1-95
     monitor: int = 0               # 0 = primary monitor
+    max_width: int = 1280          # stream downscale limit; 0 = native width
+    max_height: int = 720          # stream downscale limit; 0 = native height
 
     # --- Paths / runtime ---
     config_path: Optional[str] = field(default=None, repr=False)
@@ -68,6 +70,8 @@ class Config:
             frame_rate=raw.get("frame_rate", 10),
             quality=raw.get("quality", 60),
             monitor=raw.get("monitor", 0),
+            max_width=raw.get("max_width", 1280),
+            max_height=raw.get("max_height", 720),
             config_path=path,
         )
         cfg.validate()
@@ -100,6 +104,12 @@ class Config:
 
         if not isinstance(self.monitor, int) or self.monitor < 0:
             errors.append("monitor must be a non-negative integer")
+
+        if not isinstance(self.max_width, int) or self.max_width < 0:
+            errors.append("max_width must be a non-negative integer")
+
+        if not isinstance(self.max_height, int) or self.max_height < 0:
+            errors.append("max_height must be a non-negative integer")
 
         if errors:
             raise ConfigError("invalid config: " + "; ".join(errors))

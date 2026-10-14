@@ -62,7 +62,8 @@ def _run_worker(cfg: Config) -> int:
     sink = transport_mod.FrameSocketWriter(sock)
     stop_event = asyncio.Event()
     cap_cfg = capture_mod.CaptureConfig(
-        frame_rate=cfg.frame_rate, quality=cfg.quality, monitor=cfg.monitor
+        frame_rate=cfg.frame_rate, quality=cfg.quality, monitor=cfg.monitor,
+        max_width=cfg.max_width, max_height=cfg.max_height,
     )
     try:
         asyncio.run(capture_mod.capture_loop(cap_cfg, sink, stop_event))
@@ -79,7 +80,8 @@ async def _run_foreground(cfg: Config, stop_event: asyncio.Event) -> None:
     frame_queue: asyncio.Queue = asyncio.Queue(maxsize=cfg.frame_rate * 2)
     source = streamer_mod.QueueFrameSource(frame_queue)
     cap_cfg = capture_mod.CaptureConfig(
-        frame_rate=cfg.frame_rate, quality=cfg.quality, monitor=cfg.monitor
+        frame_rate=cfg.frame_rate, quality=cfg.quality, monitor=cfg.monitor,
+        max_width=cfg.max_width, max_height=cfg.max_height,
     )
 
     capture_task = asyncio.create_task(

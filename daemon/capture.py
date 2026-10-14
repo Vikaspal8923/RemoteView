@@ -58,10 +58,13 @@ class QueueFrameSink:
 class CaptureConfig:
     """Minimal capture settings pulled from the shared Config."""
 
-    def __init__(self, frame_rate: int = 10, quality: int = 60, monitor: int = 0):
+    def __init__(self, frame_rate: int = 10, quality: int = 60, monitor: int = 0,
+                 max_width: int = 1280, max_height: int = 720):
         self.frame_rate = frame_rate
         self.quality = quality
         self.monitor = monitor
+        self.max_width = max_width
+        self.max_height = max_height
 
 
 def compress_to_jpeg(pil_image: Image.Image, quality: int) -> bytes:
@@ -106,6 +109,13 @@ async def capture_loop(
             # grab() returns raw BGRA; convert to PIL and compress.
             shot = sct.grab(monitor)
             img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+            # Downscale before JPEG compression.  Keeping the aspect ratio
+            # materially reduces CPU, bandwidth, and viewer decode latency.
+            max_size = (cfg.max_width, cfg.max_height)
+            if max_size[0] > 0 and max_size[1] > 0 and (
+                img.width > max_size[0] or img.height > max_size[1]
+            ):
+                img.thumbnail(max_size, Image.Resampling.LANCZOS)
             frame_bytes = compress_to_jpeg(img, cfg.quality)
 
             now_ms = int(time.time() * 1000)
