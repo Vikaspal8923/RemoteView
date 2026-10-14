@@ -1,0 +1,118 @@
+"""RemoteView configuration: dataclass + JSON loader/validator.
+
+Both the home (daemon) and remote (viewer) machines use the same config.json
+schema. See the design doc's Configuration section for field semantics.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass, field, asdict
+from typing import Optional
+
+
+class ConfigError(ValueError):
+    """Raised when a config file is missing required fields or has bad values."""
+
+
+@dataclass
+class Config:
+    """Runtime configuration for the daemon and/or viewer.
+
+    Required fields are validated by :meth:`validate`, which
+    :meth:`load` calls automatically.
+    """
+
+    # --- Connection ---
+    viewer_ip: str = "127.0.0.1"
+    viewer_port: int = 9000
+
+    # --- Auth / TLS ---
+    auth_token: str = ""            # 64-char hex string (32 bytes)
+    tls_cert: str = "certs/server.crt"
+    tls_key: str = "certs/server.key"  # daemon only; never shipped to viewer
+
+    # --- Capture (daemon only) ---
+    frame_rate: int = 10           # capture FPS (5-30 recommended)
+    quality: int = 60              # JPEG quality 1-95
+    monitor: int = 0               # 0 = primary monitor
+
+    # --- Paths / runtime ---
+    config_path: Optional[str] = field(default=None, repr=False)
+
+    @staticmethod
+    def load(path: str) -> "Config":
+        """Load and validate a config from a JSON file.
+
+        Raises :class:`ConfigError` (a ``ValueError``) on missing file,
+        malformed JSON, or validation failure.
+        """
+        if not os.path.isfile(path):
+            raise ConfigError(f"config file not found: {path}")
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+        except json.JSONDecodeError as exc:
+            raise ConfigError(f"invalid JSON in {path}: {exc}") from exc
+
+        if not isinstance(raw, dict):
+            raise ConfigError("config root must be a JSON object")
+
+        cfg = Config(
+            viewer_ip=raw.get("viewer_ip", Config.viewer_ip),
+            viewer_port=raw.get("viewer_port", Config.viewer_port),
+            auth_token=raw.get("auth_token", ""),
+            tls_cert=raw.get("tls_cert", "certs/server.crt"),
+            tls_key=raw.get("tls_key", "certs/server.key"),
+            frame_rate=raw.get("frame_rate", 10),
+            quality=raw.get("quality", 60),
+            monitor=raw.get("monitor", 0),
+            config_path=path,
+        )
+        cfg.validate()
+        return cfg
+
+    def validate(self) -> None:
+        """Validate required fields and value ranges.
+
+        Raises :class:`ConfigError` listing every problem found.
+        """
+        errors = []
+
+        if not self.viewer_ip or not str(self.viewer_ip).strip():
+            errors.append("viewer_ip is required")
+
+        if not isinstance(self.viewer_port, int) or not (1 <= self.viewer_port <= 65535):
+            errors.append("viewer_port must be an integer in 1..65535")
+
+        if not self.auth_token or len(self.auth_token) != 64:
+            errors.append("auth_token must be a 64-char hex string")
+
+        if not self.tls_cert:
+            errors.append("tls_cert is required")
+
+        if not isinstance(self.frame_rate, int) or not (1 <= self.frame_rate <= 120):
+            errors.append("frame_rate must be an integer in 1..120")
+
+        if not isinstance(self.quality, int) or not (1 <= self.quality <= 95):
+            errors.append("quality must be an integer in 1..95")
+
+        if not isinstance(self.monitor, int) or self.monitor < 0:
+            errors.append("monitor must be a non-negative integer")
+
+        if errors:
+            raise ConfigError("invalid config: " + "; ".join(errors))
+
+    def to_dict(self) -> dict:
+        """Return a JSON-serializable dict (excludes config_path)."""
+        d = asdict(self)
+        d.pop("config_path", None)
+        return d
+
+    def save(self, path: str) -> None:
+        """Write this config to ``path`` as pretty JSON."""
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(self.to_dict(), fh, indent=2)
+            fh.write("\n")

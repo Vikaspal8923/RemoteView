@@ -1,0 +1,10 @@
+# RemoteView dependencies
+# Cross-platform core (Linux + Windows)
+mss>=9.0
+Pillow>=10.0
+cryptography>=42.0
+psutil>=5.9
+
+# Windows only (installed automatically by setup.py on Windows)
+# Used for the daemon Windows Service wrapper and session-0 -> user-session launch.
+pywin32>=306; sys_platform == "win32"

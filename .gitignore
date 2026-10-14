@@ -1,0 +1,48 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ---- Virtual environments ----
+.venv/
+venv/
+env/
+ENV/
+.venv-*/
+
+# ---- Testing / coverage ----
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ---- RemoteView runtime artifacts (secrets / local state) ----
+# Generated config contains the auth token; never commit it.
+config.json
+*.local.json
+# Generated TLS cert/key material lives here and must not be pushed.
+certs/
+*.crt
+*.key
+*.pem
+*.p12
+*.pfx
+# Pairing codes / logs produced at runtime.
+*.log
+
+# ---- OS / editor cruft ----
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
