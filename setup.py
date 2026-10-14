@@ -20,7 +20,7 @@ Viewer mode:
   * decodes the pairing code -> ip, port, one-time token, cert fingerprint
   * downloads the JSON bundle from the host's pairing server
   * verifies the downloaded cert against the fingerprint from the code
-  * saves cert + config locally
+  * saves cert + private key + config locally
   * launches the viewer
 """
 
@@ -175,11 +175,17 @@ def run_host(args) -> int:
     pairing_port = args.viewer_port + 1
     code = crypto.encode_pairing_code(host_ip, pairing_port, otp, fp)
 
-    # The bundle the viewer downloads: cert PEM + config JSON (NO private key).
+    # The bundle the viewer downloads: cert + private key PEMs + config JSON.
+    # The key ships here -- once, over the one-time-token pairing channel --
+    # because the viewer is the TLS server and must present this cert when
+    # the daemon dials in (the daemon pins this exact cert).
     with open(cert_path, "r", encoding="utf-8") as fh:
         cert_pem = fh.read()
+    with open(key_path, "r", encoding="utf-8") as fh:
+        key_pem = fh.read()
     bundle = {
         "cert_pem": cert_pem,
+        "key_pem": key_pem,
         "cert_fingerprint": _b64e(fp),
         "config": cfg.to_dict(),
     }
@@ -267,6 +273,7 @@ def run_viewer(args) -> int:
     certs_dir = os.path.join(workdir, "certs")
     os.makedirs(certs_dir, exist_ok=True)
     cert_path = os.path.join(certs_dir, "server.crt")
+    key_path = os.path.join(certs_dir, "server.key")
     config_path = os.path.join(workdir, "config.json")
 
     print(f"Connecting to pairing server at {host_ip}:{pairing_port} ...")
@@ -299,17 +306,30 @@ def run_viewer(args) -> int:
     with open(cert_path, "w", encoding="utf-8") as fh:
         fh.write(bundle["cert_pem"])
 
-    # Save config; point tls_cert at the local copy. The private key is never
-    # shipped to the viewer.
+    # The viewer is the TLS server: it must present the private key that
+    # matches the pinned cert, so the key ships in the bundle (delivered
+    # only over the one-time-token pairing channel).
+    if "key_pem" not in bundle:
+        print("error: bundle is missing the TLS private key", file=sys.stderr)
+        return 1
+    with open(key_path, "w", encoding="utf-8") as fh:
+        fh.write(bundle["key_pem"])
+    try:
+        os.chmod(key_path, 0o600)
+    except OSError:
+        pass  # best-effort (no-op on Windows)
+
+    # Save config; point tls_cert + tls_key at the local copies.
     cfg_dict = dict(bundle["config"])
     cfg_dict["tls_cert"] = cert_path
-    cfg_dict.pop("tls_key", None)
+    cfg_dict["tls_key"] = key_path
     cfg = Config(**{k: v for k, v in cfg_dict.items() if k in Config.__dataclass_fields__})
     cfg.config_path = config_path
     cfg.validate()
     cfg.save(config_path)
 
     print(f"✓ Cert verified + saved: {cert_path}")
+    print(f"✓ TLS key saved: {key_path}")
     print(f"✓ Config saved: {config_path}")
     print("Launching viewer...")
 

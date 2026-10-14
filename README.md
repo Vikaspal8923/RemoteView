@@ -140,4 +140,7 @@ layer (if any) needs attention before you connect to the viewer machine.
   other). Auth token is constant-time verified before any frame flows.
 - **Do not expose `viewer_port` to the public internet.** Use a VPN (Tailscale/
   WireGuard) or firewall-allowlist the home machine's IP.
-- The private key stays on the home (daemon) machine only.
+- The TLS private key is generated on the home (daemon) machine and copied to
+  the viewer once, over the one-time-token pairing channel (the viewer is the
+  TLS server and must present the pinned cert). The pairing server runs once,
+  accepts exactly one pull, and invalidates the token immediately after.

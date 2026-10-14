@@ -1,12 +1,15 @@
 """RemoteView crypto helpers: cert generation, TLS contexts, token verify,
 and pairing-code encode/decode.
 
-Security properties (from the design doc):
+Security properties:
   * TLS 1.3 enforced, no fallback to lower versions.
-  * Viewer pins the self-signed cert -- rejects any other cert on reconnect.
+  * The daemon pins the self-signed cert -- it rejects any other cert when
+    it dials the viewer (the viewer presents this cert as the TLS server).
   * Auth token verified with a constant-time compare before any frame flows.
 
-The private key never leaves the home (daemon) machine.
+The private key is generated on the home (daemon) machine and copied to the
+viewer once during pairing, over the one-time-token pairing channel; the
+viewer needs it to present the pinned cert as the TLS server.
 """
 
 from __future__ import annotations

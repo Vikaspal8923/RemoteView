@@ -75,17 +75,17 @@ Decodes the code, pulls cert and config from the home machine automatically, sav
 **Phase 1 — Pairing (one-time)**
 
 1. `setup.py --mode host` generates TLS cert + key + 32-byte auth token, auto-detects public IP, builds the pairing payload: `base32(ip + port + one_time_token + cert_fingerprint)` displayed as `RVEW-A3B2-C1D4-E5F6-G7H8-I9J0`
-2. A temporary HTTP server starts on `pairing_port` (= `viewer_port + 1`), serving the cert + config as a JSON bundle, protected by the one-time token
+2. A temporary HTTP server starts on `pairing_port` (= `viewer_port + 1`), serving the cert + private key + config as a JSON bundle, protected by the one-time token
 3. `setup.py --mode viewer --pair <code>` decodes the code → extracts IP, port, one-time token, cert fingerprint
 4. Viewer connects to `ip:pairing_port`, sends one-time token, downloads the JSON bundle
-5. Viewer verifies the cert against the fingerprint from the code; saves cert + config locally
+5. Viewer verifies the cert against the fingerprint from the code; saves cert + key + config locally (the viewer is the TLS server, so it needs the key to present the pinned cert)
 6. Pairing server on home machine shuts down; one-time token is invalidated
 
 **Phase 2 — Streaming (every session)**
 
 1. Viewer starts its TLS listener on `viewer_port`
 2. Daemon (running as OS service) makes outbound TCP connection to `viewer_ip:viewer_port`
-3. TLS 1.3 handshake completes; viewer pins the cert (rejects any other)
+3. TLS 1.3 handshake completes; daemon pins the cert presented by the viewer (rejects any other)
 4. Daemon sends 32-byte HMAC auth token; viewer verifies with constant-time compare
 5. Viewer sends `AUTH_OK`; frame stream begins
 6. On disconnect: daemon auto-reconnects with exponential backoff (1s → 2s → 4s … max 30s)
@@ -172,8 +172,8 @@ Both machines use the same file. Generate once, copy to both.
 | `viewer_ip` | Daemon | IP the daemon dials out to |
 | `viewer_port` | Both | Viewer listens here; daemon connects here |
 | `auth_token` | Both | 32-byte token; must match on both sides |
-| `tls_cert` | Both | Daemon presents it; viewer pins it |
-| `tls_key` | Daemon only | Private key stays on home machine only |
+| `tls_cert` | Both | Viewer presents it as TLS server; daemon pins it |
+| `tls_key` | Daemon + viewer | Generated on home; shipped to viewer once during pairing |
 | `frame_rate` | Daemon | Capture FPS (5–30 recommended) |
 | `quality` | Daemon | JPEG quality 1–95 (60 = good balance) |
 | `monitor` | Daemon | 0 = primary monitor |
@@ -185,8 +185,8 @@ Both machines use the same file. Generate once, copy to both.
 ### `setup.py`
 
 - CLI: `python setup.py --mode host` or `python setup.py --mode viewer --pair <code>`
-- **Host mode**: generates TLS cert + key + auth token using `cryptography` library; auto-detects public IP via `https://api.ipify.org`; writes `config.json`; calls the correct `daemon/service/` installer for the OS; starts daemon; runs the pairing HTTP server until one successful pull; prints the pairing code
-- **Viewer mode**: decodes the pairing code (base32 → IP, port, one-time token, cert fingerprint); connects to the pairing HTTP server; downloads and verifies the cert + config bundle; saves to disk; launches `viewer/main.py`
+- **Host mode**: generates TLS cert + key + auth token using `cryptography` library; `--ip` embeds this machine's address in the pairing code (default: public-IP auto-detect via `https://api.ipify.org`); writes `config.json` (the viewer's address is recorded when it pulls the bundle, from its pairing source IP); calls the correct `daemon/service/` installer for the OS; starts daemon; runs the pairing HTTP server until one successful pull; prints the pairing code
+- **Viewer mode**: decodes the pairing code (base32 → IP, port, one-time token, cert fingerprint); connects to the pairing HTTP server; downloads and verifies the cert + key + config bundle; saves to disk; launches `viewer/main.py`
 - Pairing code format: `base32(ip_bytes + port_uint16 + token_16bytes + fingerprint_4bytes)` → grouped in 4-char blocks, e.g. `RVEW-A3B2-C1D4-E5F6-G7H8-I9J0`
 - One-time token: invalidated after first successful viewer pull
 

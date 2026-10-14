@@ -140,7 +140,10 @@ def test_host_viewer_pairing_flow():
 
         with open(cert_path, "r") as fh:
             cert_pem = fh.read()
-        bundle = {"cert_pem": cert_pem, "cert_fingerprint": setup_mod._b64e(fp),
+        with open(key_path, "r") as fh:
+            key_pem = fh.read()
+        bundle = {"cert_pem": cert_pem, "key_pem": key_pem,
+                  "cert_fingerprint": setup_mod._b64e(fp),
                   "config": cfg.to_dict()}
         state = {"otp": otp, "bundle": bundle, "served": False,
                  "config_path": cfg_path, "viewer_ip_override": None}
@@ -169,12 +172,13 @@ def test_host_viewer_pairing_flow():
         # the daemon dials this address.
         with open(cfg_path, "r") as fh:
             assert json.load(fh)["viewer_ip"] == "127.0.0.1"
-        # Private key must NOT be in the bundle.
-        assert "tls_key" not in got["config"] or True  # config dict has tls_key path only
+        # The cert PEM stays cert-only; the key ships as its own field (the
+        # viewer is the TLS server and must present the private key).
         assert "PRIVATE KEY" not in got["cert_pem"]
+        assert "PRIVATE KEY" in got["key_pem"]
 
         httpd.shutdown()
-        print("  ok: host->viewer pairing flow (bundle pulled, fp verified, viewer_ip captured, no key leak)")
+        print("  ok: host->viewer pairing flow (bundle pulled, fp verified, viewer_ip captured, key shipped)")
 
 
 def test_one_time_token_invalidated():
