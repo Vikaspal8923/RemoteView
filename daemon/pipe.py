@@ -24,13 +24,23 @@ from shared import protocol as proto
 PIPE_NAME = r"\\.\pipe\RemoteViewFrames"
 
 # SDDL for the pipe's security descriptor:
-#   D:                -> a protected DACL (no inheritance from parent)
-#   (A;;FA;;;SY)      -> SYSTEM (the Boss, LocalSystem): full access
-#   (A;;FA;;;BA)      -> BUILTIN\Administrators: full access
-#   (A;;GW;;;AU)      -> Authenticated Users: generic WRITE (the per-session
-#                        Helper runs as the interactive user and only writes)
-# The pipe is INBOUND (server reads), so the client needs write access only.
-PIPE_SDDL = "D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;GW;;;AU)"
+#   D:            -> a protected DACL (no inheritance from parent)
+#   (A;;FA;;;SY)  -> SYSTEM (the Boss, LocalSystem): full access
+#   (A;;FA;;;BA)  -> BUILTIN\Administrators: full access
+#   (A;;FA;;;AU)  -> Authenticated Users: full access
+#
+# Why full access for AU (not write-only)? Opening the client end of a named
+# pipe needs more than GENERIC_WRITE maps to (Windows internally needs read/
+# attributes on the handle too), so a write-only grant causes CreateFile to
+# fail with ERROR_ACCESS_DENIED. Full access is reliable.
+#
+# Security note: this is a LOCAL pipe (\\.\pipe\), reachable only by processes
+# on the same machine. The real security boundary is the TLS + auth-token layer
+# inside the Boss (Session 0 / SYSTEM) -- the token and private key are NEVER
+# exposed over this pipe. Frames on the pipe are screen data already destined
+# for the viewer. Granting local users full access to this internal frame pipe
+# is an acceptable v1 tradeoff; it can be tightened later if needed.
+PIPE_SDDL = "D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;AU)"
 
 # Generous read buffer for the server (a single large frame must fit).
 _PIPE_BUFSIZE = 64 * 1024
@@ -169,11 +179,17 @@ def close_handle(handle) -> None:
 # Client side (Helper): connect + a synchronous FrameSink that writes frames.
 # --------------------------------------------------------------------------- #
 def connect_client_handle():
-    """Connect the Helper to the Boss's pipe. Returns a write handle."""
+    """Connect the Helper to the Boss's pipe. Returns a write handle.
+
+    We request GENERIC_READ | GENERIC_WRITE: although this pipe is INBOUND
+    (the Helper only writes), Windows internally needs read/attributes access
+    on the pipe handle at open time. Requesting only GENERIC_WRITE is the
+    classic cause of ERROR_ACCESS_DENIED on the client connect.
+    """
     require_windows()
     return win32file.CreateFile(
         PIPE_NAME,
-        win32file.GENERIC_WRITE,
+        win32file.GENERIC_READ | win32file.GENERIC_WRITE,
         0,  # no sharing
         None,  # default SECURITY_ATTRIBUTES
         win32file.OPEN_EXISTING,
