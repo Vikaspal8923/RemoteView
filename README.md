@@ -39,6 +39,168 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Complete setup: Windows home machine + Linux viewer
+
+This is the two-machine setup from a blank installation. The Windows home
+machine is the screen being monitored. The Linux viewer machine displays it.
+
+### 1. Prepare Windows
+
+Open **Administrator Command Prompt**. Install Git and regular CPython 3.13:
+
+```bat
+winget install --id Git.Git --exact
+winget install --id Python.Python.3.13 --exact
+```
+
+Close and reopen the Administrator Command Prompt, then verify:
+
+```bat
+git --version
+py -3.13 --version
+```
+
+Clone and install RemoteView:
+
+```bat
+cd /d C:\Users\%USERNAME%
+git clone https://github.com/Vikaspal8923/RemoteView.git
+cd RemoteView
+py -3.13 -m pip install -r requirements.txt
+```
+
+Use regular Python 3.13 for the Windows service. Do not use Python `3.14t`
+(free-threaded Python), because `pywin32` cannot host the service reliably
+with that interpreter.
+
+Allow the default network ports if Windows Firewall blocks local-network
+connections:
+
+```bat
+netsh advfirewall firewall add rule name="RemoteView pairing" dir=in action=allow protocol=TCP localport=9001
+netsh advfirewall firewall add rule name="RemoteView viewer" dir=in action=allow protocol=TCP localport=9000
+```
+
+### 2. Prepare Linux
+
+On Ubuntu/Debian:
+
+```bash
+sudo apt update
+sudo apt install -y git python3 python3-venv python3-pip python3-tk
+```
+
+Clone and install RemoteView:
+
+```bash
+cd ~/Desktop
+git clone https://github.com/Vikaspal8923/RemoteView.git
+cd RemoteView
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+Close any previous viewer before pairing:
+
+```bash
+pkill -f 'viewer.main|setup.py --mode viewer' || true
+```
+
+### 3. Generate a pairing code on Windows
+
+Find the Windows Wi-Fi IPv4 address with `ipconfig`, then run:
+
+```bat
+cd /d C:\Users\%USERNAME%\RemoteView
+py -3.13 setup.py --mode host --ip 10.125.39.27
+```
+
+Replace `10.125.39.27` with the actual Windows LAN address. Leave this
+command running. The printed pairing code can be reused while this window is
+open.
+
+### 4. Pair and launch the Linux viewer
+
+Paste the code printed by Windows:
+
+```bash
+cd ~/Desktop/RemoteView
+source .venv/bin/activate
+python setup.py --mode viewer --pair 'RVEW-PASTE-THE-CODE-HERE'
+```
+
+The viewer downloads the certificate, key, and config, then opens the viewer
+window automatically.
+
+### 5. Install and start the Windows service
+
+After pairing succeeds, use an Administrator Command Prompt on Windows:
+
+```bat
+cd /d C:\Users\%USERNAME%\RemoteView
+set REMOTEVIEW_CONFIG=C:\Users\%USERNAME%\RemoteView\config.json
+py -3.13 -m daemon.service.windows install
+py -3.13 -m daemon.service.windows start
+py -3.13 -m daemon.service.windows status
+```
+
+Expected:
+
+```text
+RemoteViewDaemon: RUNNING
+```
+
+The service launches the interactive capture Helper automatically. Do not run
+`daemon.main --worker` manually during normal use.
+
+### Ports and recovery
+
+| Port | Machine | Purpose |
+|---|---|---|
+| 9001 | Windows | Temporary pairing server |
+| 9000 | Linux | TLS viewer listener |
+| 47921 | Windows only | Local Boss-to-Helper socket |
+
+If Linux port 9000 is busy:
+
+```bash
+ss -ltnp | grep ':9000'
+pkill -f 'viewer.main|setup.py --mode viewer' || true
+```
+
+If Windows port 9001 is busy:
+
+```bat
+netstat -ano | findstr :9001
+taskkill /F /PID PID_NUMBER
+```
+
+Alternatively choose another viewer port:
+
+```bat
+py -3.13 setup.py --mode host --ip 10.125.39.27 --viewer-port 9100
+```
+
+The pairing server then uses port `9101`, and the viewer uses `9100` from the
+downloaded configuration.
+
+For a clean Windows service reinstall:
+
+```bat
+py -3.13 -m daemon.service.windows stop
+sc delete RemoteViewDaemon
+py -3.13 -m daemon.service.windows install
+py -3.13 -m daemon.service.windows start
+```
+
+For diagnostics:
+
+```bat
+type C:\Users\%USERNAME%\RemoteView\remoteview-service.log
+py -3.13 tests\test_windows_smoke.py
+```
+
 ## Run it (Phase 1, single-process foreground mode)
 
 1. Generate a cert + token and write a config:
@@ -141,6 +303,7 @@ layer (if any) needs attention before you connect to the viewer machine.
 - **Do not expose `viewer_port` to the public internet.** Use a VPN (Tailscale/
   WireGuard) or firewall-allowlist the home machine's IP.
 - The TLS private key is generated on the home (daemon) machine and copied to
-  the viewer once, over the one-time-token pairing channel (the viewer is the
-  TLS server and must present the pinned cert). The pairing server runs once,
-  accepts exactly one pull, and invalidates the token immediately after.
+  the viewer over the pairing channel (the viewer is the TLS server and must
+  present the pinned cert). The current pairing code is reusable while the
+  host setup window remains open; close that window when pairing is no longer
+  needed.
