@@ -2,7 +2,11 @@
 
 ## Overview
 
-A two-component, self-hosted screen monitoring system. Setup is **two terminal commands** — one on each machine — connected by a short pairing code the host displays. No file copying, no manual config editing. A daemon runs silently on the home (target) machine as an OS-registered background service — no window, no taskbar — and streams compressed screen frames over an encrypted tunnel to a viewer client on the remote (operator) machine.
+A self-hosted screen monitoring system. Setup uses one host command and one
+viewer command connected by a pairing code. On Windows, the daemon is split
+into a Session-0 Boss service and an interactive desktop Helper because a
+Windows service cannot capture the logged-in desktop directly. Frames are
+downscaled, JPEG-compressed, and streamed over TLS to the viewer.
 
 Scope: **screen monitoring only** (v1). No keyboard or mouse control.
 
@@ -26,7 +30,9 @@ Home Machine (Target)                Remote Machine (Operator)
        initiates connection ──────────────────────▶
 ```
 
-**Key design choice:** the daemon always makes the outbound connection to the viewer. The viewer listens. This means no inbound firewall rules are needed on the home machine.
+**Key design choice:** the daemon always makes the outbound connection to the
+viewer. The viewer listens. The temporary pairing server is the exception and
+uses the host's pairing port during setup.
 
 ---
 
@@ -40,7 +46,8 @@ Two commands — one per machine. The pairing code handles everything in between
 python setup.py --mode host
 ```
 
-The script auto-detects your public IP, generates certs, installs the daemon as an OS service, starts it, and prints:
+The script can auto-detect an address. For Wi-Fi, VPN, or multi-adapter
+machines, an explicit LAN address is safer:
 
 ```
 ✓ Certs generated
@@ -72,14 +79,14 @@ Decodes the code, pulls cert and config from the home machine automatically, sav
 
 ## ## Connection Flow — Technical Detail
 
-**Phase 1 — Pairing (one-time)**
+**Phase 1 — Pairing**
 
-1. `setup.py --mode host` generates TLS cert + key + 32-byte auth token, auto-detects public IP, builds the pairing payload: `base32(ip + port + one_time_token + cert_fingerprint)` displayed as `RVEW-A3B2-C1D4-E5F6-G7H8-I9J0`
-2. A temporary HTTP server starts on `pairing_port` (= `viewer_port + 1`), serving the cert + private key + config as a JSON bundle, protected by the one-time token
-3. `setup.py --mode viewer --pair <code>` decodes the code → extracts IP, port, one-time token, cert fingerprint
-4. Viewer connects to `ip:pairing_port`, sends one-time token, downloads the JSON bundle
+1. `setup.py --mode host` generates TLS cert + key + auth token, selects the host IP, and builds a pairing payload displayed as `RVEW-...`
+2. A temporary HTTP server starts on `pairing_port` (`viewer_port + 1`) and serves the cert, private key, and config bundle protected by the pairing token
+3. `setup.py --mode viewer --pair <code>` decodes the code and connects to the pairing server
+4. The viewer downloads and verifies the bundle
 5. Viewer verifies the cert against the fingerprint from the code; saves cert + key + config locally (the viewer is the TLS server, so it needs the key to present the pinned cert)
-6. Pairing server on home machine shuts down; one-time token is invalidated
+6. The pairing code can be reused while the host setup window remains open; closing that process stops the pairing server
 
 **Phase 2 — Streaming (every session)**
 
@@ -161,8 +168,10 @@ Both machines use the same file. Generate once, copy to both.
   "auth_token":  "<64-char hex string — output of generate_certs.py>",
   "tls_cert":    "certs/server.crt",
   "tls_key":     "certs/server.key",
-  "frame_rate":  10,
-  "quality":     60,
+  "frame_rate":  5,
+  "quality":     45,
+  "max_width":   1280,
+  "max_height":  720,
   "monitor":     0
 }
 ```
@@ -173,9 +182,10 @@ Both machines use the same file. Generate once, copy to both.
 | `viewer_port` | Both | Viewer listens here; daemon connects here |
 | `auth_token` | Both | 32-byte token; must match on both sides |
 | `tls_cert` | Both | Viewer presents it as TLS server; daemon pins it |
-| `tls_key` | Daemon + viewer | Generated on home; shipped to viewer once during pairing |
-| `frame_rate` | Daemon | Capture FPS (5–30 recommended) |
-| `quality` | Daemon | JPEG quality 1–95 (60 = good balance) |
+| `tls_key` | Daemon + viewer | Generated on home; shipped to viewer during pairing |
+| `frame_rate` | Daemon | Capture FPS; default 5 for lower latency |
+| `quality` | Daemon | JPEG quality; default 45 for lower latency |
+| `max_width`, `max_height` | Daemon | Stream downscale limit; defaults to 1280×720 |
 | `monitor` | Daemon | 0 = primary monitor |
 
 ---
@@ -185,10 +195,10 @@ Both machines use the same file. Generate once, copy to both.
 ### `setup.py`
 
 - CLI: `python setup.py --mode host` or `python setup.py --mode viewer --pair <code>`
-- **Host mode**: generates TLS cert + key + auth token using `cryptography` library; `--ip` embeds this machine's address in the pairing code (default: public-IP auto-detect via `https://api.ipify.org`); writes `config.json` (the viewer's address is recorded when it pulls the bundle, from its pairing source IP); calls the correct `daemon/service/` installer for the OS; starts daemon; runs the pairing HTTP server until one successful pull; prints the pairing code
+- **Host mode**: generates TLS cert + key + auth token; `--ip` embeds this machine's address in the pairing code (default: automatic public/local detection); writes `config.json`; records the viewer address when it pulls the bundle; and runs the pairing server while the host command remains open
 - **Viewer mode**: decodes the pairing code (base32 → IP, port, one-time token, cert fingerprint); connects to the pairing HTTP server; downloads and verifies the cert + key + config bundle; saves to disk; launches `viewer/main.py`
 - Pairing code format: `base32(ip_bytes + port_uint16 + token_16bytes + fingerprint_4bytes)` → grouped in 4-char blocks, e.g. `RVEW-A3B2-C1D4-E5F6-G7H8-I9J0`
-- One-time token: invalidated after first successful viewer pull
+- Pairing token: reusable while the host pairing server remains running
 
 ### `shared/config.py`
 
@@ -258,11 +268,16 @@ Both machines use the same file. Generate once, copy to both.
 
 ## OS Service Installation
 
-`setup.py --mode host` installs and registers the daemon automatically for the detected OS. The commands below are for managing it after installation.
+The host setup generates the config and prints the service commands. On
+Windows, install/start those commands from an Administrator Command Prompt.
+The commands below are for managing the service after installation.
 
-### Windows — `daemon/install/windows_service.py`
+### Windows — `daemon/service/windows.py`
 
-Installed automatically via `setup.py`. Runs as a registered Windows Service — visible in Services panel and Task Manager, immune to window-targeting force-close tools.
+The Boss runs as the registered `RemoteViewDaemon` Windows Service under
+LocalSystem. It supervises a hidden Helper launched into the interactive user
+session. The service is not a second screen window and it is not immune to an
+administrator stopping the service.
 
 ```bash
 # Stop
@@ -272,18 +287,18 @@ net stop RemoteViewDaemon
 net start RemoteViewDaemon
 ```
 
-### Linux — `daemon/install/linux_systemd.sh`
+### Linux — `daemon/service/linux.py`
 
-Installed automatically via `setup.py`. Writes and enables a systemd unit file at `/etc/systemd/system/remoteview.service`.
+Writes and enables a systemd unit file at `/etc/systemd/system/remoteview.service`.
 
 ```bash
 systemctl stop remoteview
 systemctl start remoteview   # restart if needed
 ```
 
-### macOS — `daemon/install/macos_launchd.sh`
+### macOS — `daemon/service/macos.py`
 
-Installed automatically via `setup.py`. Writes and loads a launchd plist at `~/Library/LaunchAgents/com.remoteview.daemon.plist`.
+Writes and loads a launchd plist at `~/Library/LaunchAgents/com.remoteview.daemon.plist`.
 
 ```bash
 launchctl stop com.remoteview.daemon
@@ -311,7 +326,9 @@ pywin32>=306       # Windows only
 - Do not expose `viewer_port` to the public internet. Options:
   - Allowlist only the home machine's IP in the remote machine's firewall
   - Or run both over a VPN (Tailscale/WireGuard) and bind to the VPN interface only
-- `tls_key` stays on the home machine only; never copy it to the viewer
+- The viewer receives the TLS private key during pairing because the viewer is
+  the TLS server and must present the pinned certificate. Protect the viewer
+  config directory accordingly.
 
 ---
 
