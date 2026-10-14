@@ -63,7 +63,7 @@ py -3.13 --version
 Clone and install RemoteView:
 
 ```bat
-cd /d C:\Users\%USERNAME%
+cd /d "%USERPROFILE%"
 git clone https://github.com/Vikaspal8923/RemoteView.git
 cd RemoteView
 py -3.13 -m pip install -r requirements.txt
@@ -112,7 +112,7 @@ pkill -f 'viewer.main|setup.py --mode viewer' || true
 RemoteView can detect the host address automatically. The simplest command is:
 
 ```bat
-cd /d C:\Users\%USERNAME%\RemoteView
+cd /d "%USERPROFILE%\RemoteView"
 py -3.13 setup.py --mode host
 ```
 
@@ -122,7 +122,7 @@ adapters, using the Wi-Fi IPv4 address explicitly is safer. Find it with
 `ipconfig`, then run:
 
 ```bat
-cd /d C:\Users\%USERNAME%\RemoteView
+cd /d "%USERPROFILE%\RemoteView"
 py -3.13 setup.py --mode host --ip 10.125.39.27
 ```
 
@@ -148,8 +148,7 @@ window automatically.
 After pairing succeeds, use an Administrator Command Prompt on Windows:
 
 ```bat
-cd /d C:\Users\%USERNAME%\RemoteView
-set REMOTEVIEW_CONFIG=C:\Users\%USERNAME%\RemoteView\config.json
+cd /d "%USERPROFILE%\RemoteView"
 py -3.13 -m daemon.service.windows install
 py -3.13 -m daemon.service.windows start
 py -3.13 -m daemon.service.windows status
@@ -207,7 +206,7 @@ py -3.13 -m daemon.service.windows start
 For diagnostics:
 
 ```bat
-type C:\Users\%USERNAME%\RemoteView\remoteview-service.log
+type "%USERPROFILE%\RemoteView\remoteview-service.log"
 py -3.13 tests\test_windows_smoke.py
 ```
 

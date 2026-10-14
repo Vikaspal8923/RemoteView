@@ -262,7 +262,6 @@ def _install_service(config_path: str) -> None:
     if sys.platform.startswith("win"):
         print("Install the Windows service (run as admin):")
         py = sys.executable
-        print(f'  set REMOTEVIEW_CONFIG={config_path}')
         print(f'  "{py}" -m daemon.service.windows install')
         print(f'  "{py}" -m daemon.service.windows start')
         print(f'  "{py}" -m daemon.service.windows status')
