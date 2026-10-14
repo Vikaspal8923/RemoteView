@@ -82,9 +82,17 @@ def _run(cmd, check=True):
 
 
 def install(config_path: str) -> None:
+    config_path = os.path.abspath(config_path)
+    logdir = os.path.expanduser("~/Library/Logs/RemoteView")
+    os.makedirs(logdir, exist_ok=True)
     os.makedirs(os.path.dirname(PLIST_PATH), exist_ok=True)
     with open(PLIST_PATH, "w", encoding="utf-8") as fh:
-        fh.write(render_plist(config_path))
+        fh.write(render_plist(
+            config_path,
+            python_exe=sys.executable,
+            workdir=os.path.dirname(config_path),
+            logdir=logdir,
+        ))
     _run(["launchctl", "load", PLIST_PATH])
     print(f"Loaded {LABEL}")
     print(f"  stop:  launchctl stop {LABEL}")

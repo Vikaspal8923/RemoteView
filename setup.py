@@ -39,6 +39,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from shared import crypto
 from shared.config import Config
 
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
 # --------------------------------------------------------------------------- #
@@ -139,7 +140,7 @@ def _make_pairing_handler(state):
 
 
 def run_host(args) -> int:
-    workdir = os.path.abspath(args.workdir)
+    workdir = os.path.abspath(args.workdir or PROJECT_ROOT)
     os.makedirs(workdir, exist_ok=True)
     certs_dir = os.path.join(workdir, "certs")
     cert_path = os.path.join(certs_dir, "server.crt")
@@ -164,6 +165,8 @@ def run_host(args) -> int:
         frame_rate=args.frame_rate,
         quality=args.quality,
         monitor=args.monitor,
+        max_width=args.max_width,
+        max_height=args.max_height,
     )
     cfg.validate()
     cfg.save(config_path)
@@ -235,10 +238,11 @@ def _install_service(config_path: str) -> None:
     """Install + start the OS service for the current platform."""
     if sys.platform.startswith("win"):
         print("Install the Windows service (run as admin):")
-        print(f"  set REMOTEVIEW_CONFIG={config_path}")
-        print("  python -m daemon.service.windows install")
-        print("  python -m daemon.service.windows start")
-        print("  python -m daemon.service.windows status")
+        py = sys.executable
+        print(f'  set REMOTEVIEW_CONFIG={config_path}')
+        print(f'  "{py}" -m daemon.service.windows install')
+        print(f'  "{py}" -m daemon.service.windows start')
+        print(f'  "{py}" -m daemon.service.windows status')
     elif sys.platform == "darwin":
         print("Installing launchd agent...")
         try:
@@ -269,7 +273,7 @@ def run_viewer(args) -> int:
     otp_hex = decoded["otp"].hex()
     expected_fp = decoded["fingerprint"]
 
-    workdir = os.path.abspath(args.workdir)
+    workdir = os.path.abspath(args.workdir or PROJECT_ROOT)
     certs_dir = os.path.join(workdir, "certs")
     os.makedirs(certs_dir, exist_ok=True)
     cert_path = os.path.join(certs_dir, "server.crt")
@@ -345,7 +349,10 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="RemoteView setup")
     parser.add_argument("--mode", choices=["host", "viewer"], required=True)
     parser.add_argument("--pair", help="pairing code (viewer mode)")
-    parser.add_argument("--workdir", default=os.getcwd())
+    parser.add_argument(
+        "--workdir", default=None,
+        help=f"directory for config/certs (default: {PROJECT_ROOT})",
+    )
     parser.add_argument(
         "--ip",
         help="host (this machine) IP embedded in the pairing code -- the "
@@ -361,6 +368,10 @@ def main(argv=None) -> int:
     parser.add_argument("--frame-rate", type=int, default=10, dest="frame_rate")
     parser.add_argument("--quality", type=int, default=60)
     parser.add_argument("--monitor", type=int, default=0)
+    parser.add_argument("--max-width", type=int, default=1280,
+                        help="maximum streamed width (default: 1280)")
+    parser.add_argument("--max-height", type=int, default=720,
+                        help="maximum streamed height (default: 720)")
     args = parser.parse_args(argv)
 
     if args.mode == "host":

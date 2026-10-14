@@ -94,7 +94,14 @@ def install(config_path: str, display: str = ":0",
             xauthority: str = "/run/user/1000/gdm/Xauthority") -> None:
     """Write the unit, reload systemd, and enable+start the service."""
     _require_root()
-    unit = render_unit(config_path, display=display, xauthority=xauthority)
+    config_path = os.path.abspath(config_path)
+    unit = render_unit(
+        config_path,
+        python_exe=sys.executable,
+        workdir=os.path.dirname(config_path),
+        display=display,
+        xauthority=xauthority,
+    )
     with open(UNIT_PATH, "w", encoding="utf-8") as fh:
         fh.write(unit)
     os.chmod(UNIT_PATH, 0o644)
