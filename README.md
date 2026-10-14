@@ -109,14 +109,24 @@ pkill -f 'viewer.main|setup.py --mode viewer' || true
 
 ### 3. Generate a pairing code on Windows
 
-Find the Windows Wi-Fi IPv4 address with `ipconfig`, then run:
+RemoteView can detect the host address automatically. The simplest command is:
+
+```bat
+cd /d C:\Users\%USERNAME%\RemoteView
+py -3.13 setup.py --mode host
+```
+
+Automatic detection first tries the public address and then falls back to a
+local network address. On campus Wi-Fi, VPNs, or machines with multiple
+adapters, using the Wi-Fi IPv4 address explicitly is safer. Find it with
+`ipconfig`, then run:
 
 ```bat
 cd /d C:\Users\%USERNAME%\RemoteView
 py -3.13 setup.py --mode host --ip 10.125.39.27
 ```
 
-Replace `10.125.39.27` with the actual Windows LAN address. Leave this
+Replace `10.125.39.27` with the actual Windows Wi-Fi address. Leave this
 command running. The printed pairing code can be reused while this window is
 open.
 
