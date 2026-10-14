@@ -16,7 +16,7 @@ ServiceFramework.__init__(self, args) and create a stop event; SvcStop signals
 that event; SvcDoRun runs the work until the event fires. This module imports
 cleanly on Linux; the concrete class is built by build_service_class().
 
-Manage: python -m daemon.service.windows install|start|stop|remove|debug
+Manage: python -m daemon.service.windows install|update|start|stop|restart|status|remove|debug
 """
 
 from __future__ import annotations
@@ -30,6 +30,85 @@ from typing import Optional
 SERVICE_NAME = "RemoteViewDaemon"
 DISPLAY_NAME = "RemoteView Daemon"
 SERVICE_DESCRIPTION = "RemoteView screen monitoring daemon (un-killable Boss)."
+
+# --- Bootstrap for the pythonservice.exe host --------------------------------
+# When installed via `python -m daemon.service.windows install`, pywin32 records
+# this file's *path* (not a dotted module) in the service's PythonClass registry
+# value, because the module was running as __main__. When the SCM starts the
+# service, pythonservice.exe therefore adds only <root>\daemon\service to
+# sys.path and imports this file as top-level `windows` -- so the project root
+# (needed by the lazy `shared.*` / `daemon.*` imports in run()) would be missing
+# from sys.path, and the process CWD is C:\Windows\system32. Put the project
+# root on sys.path at import time so the service can import its own packages no
+# matter how it was launched. Harmless elsewhere (the path is already present).
+_PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+
+def _choose_config_path(env_value, registry_value, project_root):
+    """Pick the config path for the service process.
+
+    Precedence:
+      1. ``REMOTEVIEW_CONFIG`` environment variable (explicit override),
+      2. the value persisted at install time (pywin32 SetServiceCustomOption),
+         because a service does NOT inherit the shell that ran ``install``,
+      3. ``<project root>/config.json`` -- the default setup.py writes.
+    """
+    if env_value:
+        return os.path.abspath(env_value)
+    if registry_value:
+        return registry_value
+    return os.path.join(project_root, "config.json")
+
+
+def _resolve_config_path():
+    """Resolve config.json for this process (env > install-time registry > repo default)."""
+    registry_value = None
+    if sys.platform.startswith("win"):
+        try:
+            import win32serviceutil  # type: ignore
+
+            registry_value = win32serviceutil.GetServiceCustomOption(
+                SERVICE_NAME, "config"
+            )
+        except Exception:
+            registry_value = None
+    return _choose_config_path(
+        os.environ.get("REMOTEVIEW_CONFIG"), registry_value, _PROJECT_ROOT
+    )
+
+
+def _persist_config_path(win32serviceutil) -> None:
+    """Record the config path chosen at install/update time in the registry.
+
+    Services are started by the SCM under the System account: they do not see
+    the ``set REMOTEVIEW_CONFIG=...`` of the admin shell that installed them,
+    and their CWD is system32. pywin32's custom-option key
+    (Services\\<name>\\Parameters) survives restarts and is read back by
+    _resolve_config_path() at service runtime.
+    """
+    value = _choose_config_path(
+        os.environ.get("REMOTEVIEW_CONFIG"), None, _PROJECT_ROOT
+    )
+    win32serviceutil.SetServiceCustomOption(SERVICE_NAME, "config", value)
+    print(f"Recorded service config path: {value}")
+
+
+def _apply_config_dir(cfg, config_path: str):
+    """Resolve relative tls_cert/tls_key against the config file's directory.
+
+    The service runs with CWD=C:\\Windows\\system32, so a relative path inside
+    config.json would never be found there.
+    """
+    base = os.path.dirname(os.path.abspath(config_path))
+    if cfg.tls_cert and not os.path.isabs(cfg.tls_cert):
+        cfg.tls_cert = os.path.join(base, cfg.tls_cert)
+    if cfg.tls_key and not os.path.isabs(cfg.tls_key):
+        cfg.tls_key = os.path.join(base, cfg.tls_key)
+    return cfg
 
 
 def _load_win32service():
@@ -59,7 +138,7 @@ class BossOrchestrator:
         from shared.config import Config
         from daemon import supervisor as supervisor_mod
 
-        cfg = Config.load(self._config_path)
+        cfg = _apply_config_dir(Config.load(self._config_path), self._config_path)
 
         # 1. Supervisor thread: keep the Helper alive in the user session.
         sup_thread = threading.Thread(
@@ -192,7 +271,11 @@ def build_service_class():
             win32serviceutil.ServiceFramework.__init__(self, args)
             # Stop event signalled by SvcStop; SvcDoRun waits on it.
             self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
-            config_path = os.environ.get("REMOTEVIEW_CONFIG", "config.json")
+            # NOTE: the service does not inherit the installing shell's env
+            # (the SCM starts it with System-account env and CWD=system32), so
+            # this checks the install-time registry value and falls back to
+            # <project root>\config.json. See _resolve_config_path.
+            config_path = _resolve_config_path()
             BossOrchestrator.__init__(self, config_path)
 
         def SvcStop(self):
@@ -209,7 +292,26 @@ def build_service_class():
             )
             # Run the Boss work on a daemon thread so we can wait on hWaitStop
             # here (the canonical pattern) and return promptly on stop.
-            work = threading.Thread(target=self.run, name="boss-run", daemon=True)
+            # Guarded: a service has no console, so an exception (or a run()
+            # that ends without a stop request) would otherwise be invisible --
+            # the service would sit at RUNNING while doing nothing. Log to the
+            # Event Log and signal the stop event so `status` shows the truth.
+            def _run_guarded():
+                try:
+                    self.run()
+                    unexpected = not self._stop.is_set()
+                    reason = "run() ended without a stop request"
+                except Exception as exc:  # noqa: BLE001
+                    unexpected = True
+                    reason = f"crashed: {exc!r}"
+                if unexpected:
+                    try:
+                        servicemanager.LogErrorMsg(f"{self._svc_name_}: {reason}")
+                    except Exception:
+                        pass
+                    win32event.SetEvent(self.hWaitStop)
+
+            work = threading.Thread(target=_run_guarded, name="boss-run", daemon=True)
             work.start()
             self._threads.append(work)
             win32event.WaitForSingleObject(self.hWaitStop, win32event.INFINITE)
@@ -238,6 +340,39 @@ if __name__ == "__main__":
         _sm.PrepareToHostSingleService(RemoteViewWindowsService)
         _sm.StartServiceCtrlDispatcher()
     else:
-        # Management command from an admin shell (install/start/stop/remove).
-        win32serviceutil.HandleCommandLine(RemoteViewWindowsService)
+        # Management command from an admin shell (install/start/stop/...).
+        cmd = sys.argv[1]
+
+        if cmd == "status":
+            # pywin32's HandleCommandLine has no 'status' verb; query the SCM.
+            try:
+                status = win32serviceutil.QueryServiceStatus(SERVICE_NAME)
+            except Exception as exc:
+                print(f"{SERVICE_NAME} is not installed: {exc}", file=sys.stderr)
+                raise SystemExit(1)
+            states = {
+                _ws.SERVICE_STOPPED: "STOPPED",
+                _ws.SERVICE_START_PENDING: "START_PENDING",
+                _ws.SERVICE_STOP_PENDING: "STOP_PENDING",
+                _ws.SERVICE_RUNNING: "RUNNING",
+                _ws.SERVICE_CONTINUE_PENDING: "CONTINUE_PENDING",
+                _ws.SERVICE_PAUSE_PENDING: "PAUSE_PENDING",
+                _ws.SERVICE_PAUSED: "PAUSED",
+            }
+            name = states.get(status[1], str(status[1]))
+            print(f"{SERVICE_NAME}: {name}")
+            if status[1] == _ws.SERVICE_STOPPED and (status[3] or status[4]):
+                print(f"  exit codes: win32={status[3]} service={status[4]}")
+            raise SystemExit(0)
+
+        err = win32serviceutil.HandleCommandLine(RemoteViewWindowsService)
+        if not err and {"install", "update"} & set(sys.argv[1:]):
+            # Remember where config.json lives: the service cannot inherit this
+            # shell's REMOTEVIEW_CONFIG, so persist the resolved absolute path
+            # to the service's Parameters registry key.
+            try:
+                _persist_config_path(win32serviceutil)
+            except Exception as exc:
+                print(f"Warning: could not record config path: {exc}", file=sys.stderr)
+        raise SystemExit(err or 0)
 

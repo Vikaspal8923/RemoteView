@@ -194,12 +194,75 @@ def test_one_time_token_invalidated():
         print("  ok: one-time token invalidated after first pull")
 
 
+def test_windows_config_path_precedence():
+    """Service config resolution: env > install-time registry > repo default."""
+    from daemon.service import windows as win_svc
+
+    root = "/opt/remoteview"
+    # Env wins over everything (and is made absolute).
+    assert (
+        win_svc._choose_config_path("/x/config.json", "/reg/config.json", root)
+        == os.path.abspath("/x/config.json")
+    )
+    # Registry (persisted at install) beats the default.
+    assert (
+        win_svc._choose_config_path(None, "/reg/config.json", root)
+        == "/reg/config.json"
+    )
+    # Nothing set -> <project root>/config.json.
+    assert (
+        win_svc._choose_config_path(None, None, root)
+        == os.path.join(root, "config.json")
+    )
+    print("  ok: service config precedence (env > registry > repo default)")
+
+
+def test_windows_relative_tls_paths_resolve_against_config_dir():
+    """Relative cert/key paths must resolve next to config.json.
+
+    The service CWD is C:\\Windows\\system32, so a relative tls_cert/tls_key in
+    config.json would never be found without this normalization.
+    """
+    from daemon.service import windows as win_svc
+    from shared.config import Config
+
+    cfg = Config(tls_cert="certs/server.crt", tls_key="server.key")
+    win_svc._apply_config_dir(cfg, "/etc/remoteview/config.json")
+    assert cfg.tls_cert == "/etc/remoteview/certs/server.crt"
+    assert cfg.tls_key == "/etc/remoteview/server.key"
+
+    # Absolute paths are left untouched.
+    abs_cert = os.path.abspath("/var/certs/x.crt")
+    cfg2 = Config(tls_cert=abs_cert, tls_key="/var/certs/x.key")
+    win_svc._apply_config_dir(cfg2, "/etc/remoteview/config.json")
+    assert cfg2.tls_cert == abs_cert
+    assert cfg2.tls_key == "/var/certs/x.key"
+    print("  ok: relative tls paths resolve against the config directory")
+
+
+def test_windows_module_puts_project_root_on_path():
+    """windows.py must bootstrap the project root onto sys.path.
+
+    pythonservice.exe imports the service file as top-level `windows` with only
+    <repo>\\daemon\\service on sys.path; the lazy `shared.*`/`daemon.*` imports
+    need the project root, which the module inserts itself.
+    """
+    from daemon.service import windows as win_svc
+
+    assert win_svc._PROJECT_ROOT in sys.path
+    assert os.path.isfile(os.path.join(win_svc._PROJECT_ROOT, "shared", "config.py"))
+    print("  ok: windows.py bootstraps the project root onto sys.path")
+
+
 def main():
     print("Running Phase 2 (service/setup) tests:")
     test_loopback_transport_roundtrip()
     test_loopback_transport_rejects_bad_token()
     test_render_unit()
     test_render_plist()
+    test_windows_config_path_precedence()
+    test_windows_relative_tls_paths_resolve_against_config_dir()
+    test_windows_module_puts_project_root_on_path()
     test_host_viewer_pairing_flow()
     test_one_time_token_invalidated()
     print("\nAll Phase 2 tests passed.")

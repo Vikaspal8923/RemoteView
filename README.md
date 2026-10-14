@@ -95,15 +95,30 @@ cannot see the interactive desktop):
   over a **loopback socket** (127.0.0.1, authenticated with the shared token).
   If killed, the Boss respawns it in ~1s.
 
-Install on the home machine (run as Administrator):
+Install on the home machine (run as Administrator, from the project root):
+
+```bat
+python -m daemon.service.windows install
+python -m daemon.service.windows start
+python -m daemon.service.windows status
+```
+
+The service finds `config.json` in this order: the `REMOTEVIEW_CONFIG`
+environment variable (if set **machine-wide**), the path recorded at install
+time in the service's registry entry, then `<repo>\config.json` (the default
+`setup.py` writes). If your config lives outside the repo, set the variable
+*before* installing — the value is captured into the registry then, because a
+service does **not** inherit the installing shell's environment:
 
 ```bat
 set REMOTEVIEW_CONFIG=C:\path\to\config.json
 python -m daemon.service.windows install
-python -m daemon.service.windows start
 ```
 
-Manage: `python -m daemon.service.windows stop|remove`, or use `services.msc`.
+Manage: `python -m daemon.service.windows status|stop|restart|remove`, or use
+`services.msc`. If the service fails at startup, the reason is logged to Event
+Viewer → Windows Logs → Application (source `RemoteViewDaemon`), and `status`
+prints the exit codes.
 
 ### Before wiring two machines — run the Windows smoke test
 

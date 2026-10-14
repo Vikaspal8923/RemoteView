@@ -191,6 +191,7 @@ def _install_service(config_path: str) -> None:
         print(f"  set REMOTEVIEW_CONFIG={config_path}")
         print("  python -m daemon.service.windows install")
         print("  python -m daemon.service.windows start")
+        print("  python -m daemon.service.windows status")
     elif sys.platform == "darwin":
         print("Installing launchd agent...")
         try:
