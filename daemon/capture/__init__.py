@@ -30,7 +30,7 @@ async def capture_loop(cfg: CaptureConfig, sink: FrameSink, stop_event: Optional
     # Keep optional Windows capture dependencies out of import-time paths.
     from .gdi import GdiBackend
     from .hybrid import HybridBackend
-    backend = GdiBackend(cfg.monitor) if cfg.capture_backend == "gdi" else HybridBackend(cfg.monitor)
+    backend = GdiBackend(cfg.monitor) if cfg.capture_backend == "gdi" else HybridBackend(gdi=GdiBackend(cfg.monitor))
     try:
         while not stop_event.is_set():
             start=time.monotonic(); img=backend.capture()

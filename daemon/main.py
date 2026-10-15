@@ -187,9 +187,22 @@ def main(argv: Optional[list] = None) -> int:
     )
     parser.add_argument("--diagnose-windows", action="store_true",
                         help="print visible top-level window affinity diagnostics")
+    parser.add_argument("--probe", action="store_true")
+    parser.add_argument("--json", action="store_true", dest="json_output")
+    parser.add_argument("--capture-once", action="store_true")
+    parser.add_argument("--dump")
+    parser.add_argument("--fake-reader", action="store_true")
+    parser.add_argument("--pretend-wda", action="store_true")
     args = parser.parse_args(argv)
 
     cfg = Config.load(args.config)
+
+    if args.probe:
+        from daemon.capture.win32.api import user32, d3d11, dxgi
+        import json
+        data = {"platform": sys.platform, "exports": {"user32": user32 is not None, "d3d11": d3d11 is not None, "dxgi": dxgi is not None}}
+        print(json.dumps(data) if args.json_output else data)
+        return 0
 
     if args.diagnose_windows:
         from daemon.capture.affinity import scan

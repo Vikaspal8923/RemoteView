@@ -1,0 +1,19 @@
+name: affinity-capture
+on: [push, pull_request]
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install -r requirements.txt pytest numpy pillow
+      - run: pytest -q
+  windows-abi:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install -r requirements.txt pytest numpy pillow
+      - run: pytest -q tests/test_import_safety.py tests/test_vtable_indices.py tests/test_struct_layouts.py
