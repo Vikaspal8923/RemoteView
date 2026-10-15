@@ -192,7 +192,8 @@ class ViewerDisplay:
         if now - self._last_title_update >= 0.5:
             fps_txt = f"{self._fps_ema:.1f} fps" if self._fps_ema else "-- fps"
             lat_txt = f"{latency} ms" if self._last_latency_ms is not None else "-- ms"
-            self.root.title(f"{self.title}  |  latency {lat_txt}  |  {fps_txt}")
+            state_txt = "CONTROL ACTIVE" if self.control_enabled else "MONITORING ONLY"
+            self.root.title(f"{self.title}  |  {state_txt}  |  latency {lat_txt}  |  {fps_txt}")
             self._last_title_update = now
 
     def run(self):

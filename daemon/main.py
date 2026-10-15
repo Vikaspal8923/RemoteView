@@ -36,6 +36,15 @@ def _run_worker(cfg: Config) -> int:
     FrameSocketWriter sink.
     """
     import time
+    def worker_log(message):
+        try:
+            import os
+            path = os.path.join(os.path.dirname(os.path.abspath(cfg.config_path or "config.json")), "remoteview-helper.log")
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(message + "\n")
+        except Exception:
+            pass
+        print(message, flush=True)
 
     from daemon import capture as capture_mod
     from daemon import transport as transport_mod
@@ -58,7 +67,7 @@ def _run_worker(cfg: Config) -> int:
         transport_mod.close_handle(sock)
         return 4
 
-    print("[worker] connected + authenticated to Boss; capturing", flush=True)
+    worker_log("[worker] connected + authenticated to Boss; capturing")
     import threading
     from shared.control import decode_control_message
     from daemon import input as input_mod
@@ -77,10 +86,10 @@ def _run_worker(cfg: Config) -> int:
                     msg = decode_control_message(line)
                     if msg.type == "CONTROL_ENABLE":
                         control_enabled = True
-                        print("[worker] remote control enabled", flush=True)
+                        worker_log("[worker] remote control enabled")
                     elif msg.type in {"CONTROL_DISABLE", "EMERGENCY_STOP"}:
                         control_enabled = False; input_mod.emergency_release()
-                        print("[worker] remote control disabled", flush=True)
+                        worker_log("[worker] remote control disabled")
                     elif control_enabled:
                         d = msg.data
                         if msg.type == "MOUSE_MOVE": input_mod.move_normalized(d["x"], d["y"])
@@ -89,7 +98,7 @@ def _run_worker(cfg: Config) -> int:
                         elif msg.type in {"KEY_DOWN", "KEY_UP"}: input_mod.key_name(d["key"], msg.type.endswith("DOWN"))
                         elif msg.type == "TYPE_TEXT": input_mod.type_text(d["text"])
                 except Exception as exc:
-                    print(f"[worker] control rejected: {exc!r}", flush=True)
+                    worker_log(f"[worker] control rejected: {exc!r}")
         finally:
             control_enabled = False
             input_mod.emergency_release()

@@ -190,6 +190,9 @@ class BossOrchestrator:
         stream_stop = asyncio.Event()
 
         def start_stream(current_cfg):
+            def handle_control(msg):
+                self._log(f"control received: {msg.type}")
+                control_queue.put(msg)
             return asyncio.ensure_future(
                 streamer_mod.stream_frames(
                     current_cfg.viewer_ip,
@@ -198,7 +201,7 @@ class BossOrchestrator:
                     current_cfg.tls_cert,
                     source,
                     stream_stop,
-                    control_handler=lambda msg: control_queue.put(msg),
+                    control_handler=handle_control,
                 )
             )
 
