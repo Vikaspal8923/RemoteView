@@ -46,25 +46,30 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 # Helpers
 # --------------------------------------------------------------------------- #
 def detect_public_ip(timeout: float = 5.0) -> str:
-    """Best-effort public IP detection via api.ipify.org.
+    """Choose a reachable host address automatically.
 
-    Falls back to the local LAN IP if the request fails (offline / firewall).
+    Prefer the local interface used for outbound traffic because the normal
+    Windows-host/Linux-viewer setup is on the same LAN. Only fall back to a
+    public address when no LAN interface can be determined.
     """
     import urllib.request
 
     try:
-        with urllib.request.urlopen("https://api.ipify.org", timeout=timeout) as resp:
-            return resp.read().decode("ascii").strip()
-    except Exception:
-        # Fallback: local IP used to reach a public address (no packets sent).
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-        except Exception:
-            return "127.0.0.1"
+            local_ip = s.getsockname()[0]
+            if local_ip and not local_ip.startswith("127."):
+                return local_ip
         finally:
             s.close()
+    except Exception:
+        pass
+    try:
+        with urllib.request.urlopen("https://api.ipify.org", timeout=timeout) as resp:
+            return resp.read().decode("ascii").strip()
+    except Exception:
+        return "127.0.0.1"
 
 
 def _b64e(data: bytes) -> str:

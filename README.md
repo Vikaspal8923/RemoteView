@@ -44,6 +44,29 @@ pip install -r requirements.txt
 
 This is the two-machine setup from a blank installation. The Windows home
 machine is the screen being monitored. The Linux viewer machine displays it.
+Run the sections in order. `%USERPROFILE%` is filled in automatically by
+Windows for the currently logged-in user; `~` is filled in automatically by
+Linux for the current user. Do not replace either with a guessed username.
+
+### Clean stop before a fresh setup or retest
+
+Windows Administrator Command Prompt:
+
+```bat
+cd /d "%USERPROFILE%\RemoteView"
+py -3.13 -m daemon.service.windows stop
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'RemoteView|daemon.main|setup.py' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+```
+
+Linux terminal:
+
+```bash
+pkill -f 'viewer.main|setup.py --mode viewer' || true
+pkill -f 'daemon.main|RemoteView' || true
+```
+
+These commands stop RemoteView only. They do not remove the repository,
+certificates, or configuration.
 
 ### 1. Prepare Windows
 
@@ -110,16 +133,16 @@ pkill -f 'viewer.main|setup.py --mode viewer' || true
 
 ### 3. Generate a pairing code on Windows
 
-RemoteView can detect the host address automatically. The simplest command is:
+RemoteView automatically selects the local LAN address used by the Windows
+machine. The simplest command is:
 
 ```bat
 cd /d "%USERPROFILE%\RemoteView"
 py -3.13 setup.py --mode host
 ```
 
-Automatic detection first tries the public address and then falls back to a
-local network address. On campus Wi-Fi, VPNs, or machines with multiple
-adapters, using the Wi-Fi IPv4 address explicitly is safer. Find it with
+On campus Wi-Fi, VPNs, or machines with multiple adapters, using the Wi-Fi
+IPv4 address explicitly is safer. Find it with
 `ipconfig`, then run:
 
 ```bat
@@ -130,6 +153,17 @@ py -3.13 setup.py --mode host --ip 10.125.39.27
 Replace `10.125.39.27` with the actual Windows Wi-Fi address. Leave this
 command running. The printed pairing code can be reused while this window is
 open.
+
+From Linux, verify that the Windows pairing port is reachable before pairing:
+
+```bash
+nc -vz WINDOWS_IP 9001
+```
+
+Replace `WINDOWS_IP` with the address printed by Windows. A successful result
+means the two machines can reach each other. If it fails, connect both
+machines to the same Wi-Fi, use the Windows Wi-Fi IPv4 address, and allow the
+RemoteView firewall rules from the Windows section.
 
 ### 4. Pair and launch the Linux viewer
 
