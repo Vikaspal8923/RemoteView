@@ -67,10 +67,14 @@ class ViewerDisplay:
         if self.control_send:
             self.control_send("CONTROL_ENABLE")
         self.root.title(f"{self.title} | CONTROL ACTIVE")
-        self.canvas.bind("<Motion>", self._on_motion)
-        self.canvas.bind("<ButtonPress>", self._on_button_down)
-        self.canvas.bind("<ButtonRelease>", self._on_button_up)
-        self.canvas.bind("<MouseWheel>", self._on_wheel)
+        # Bind pointer events at the application level. This remains reliable
+        # when the image item or a window-manager focus change owns the event.
+        self.root.bind_all("<Motion>", self._on_motion, add="+")
+        self.root.bind_all("<ButtonPress>", self._on_button_down, add="+")
+        self.root.bind_all("<ButtonRelease>", self._on_button_up, add="+")
+        self.root.bind_all("<MouseWheel>", self._on_wheel, add="+")
+        self.root.bind_all("<Button-4>", lambda event: self._on_wheel_delta(event, 1), add="+")
+        self.root.bind_all("<Button-5>", lambda event: self._on_wheel_delta(event, -1), add="+")
 
     # ---- event handlers ---- #
     def _on_close(self):
@@ -123,15 +127,23 @@ class ViewerDisplay:
         x, y = self._coords(event); self._send_control("MOUSE_MOVE", x=x, y=y)
 
     def _on_button_down(self, event):
+        if event.num not in (1, 2, 3):
+            return
         self.canvas.focus_set()
         x, y = self._coords(event); self._send_control("MOUSE_MOVE", x=x, y=y)
         self._send_control("MOUSE_BUTTON_DOWN", button={1:"left",2:"middle",3:"right"}.get(event.num,"left"))
 
     def _on_button_up(self, event):
+        if event.num not in (1, 2, 3):
+            return
         self._send_control("MOUSE_BUTTON_UP", button={1:"left",2:"middle",3:"right"}.get(event.num,"left"))
 
     def _on_wheel(self, event):
-        self._send_control("MOUSE_SCROLL", delta=max(-20, min(20, int(event.delta / 120))))
+        self._on_wheel_delta(event, int(event.delta / 120))
+
+    def _on_wheel_delta(self, _event, delta):
+        if delta:
+            self._send_control("MOUSE_SCROLL", delta=max(-20, min(20, delta)))
 
     @property
     def stop_requested(self) -> bool:
