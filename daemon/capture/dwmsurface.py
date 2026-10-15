@@ -49,25 +49,38 @@ class DwmSurfaceReader:
             self._devices[key]=dev; self._contexts[key]=ctx; return dev,ctx
         finally: com_release(factory)
     def grab(self, hwnd):
-        if __import__('sys').platform!='win32' or self._dwm is None: return None
+        if __import__('sys').platform!='win32' or self._dwm is None:
+            log.warning("DWM shared-surface export unavailable")
+            return None
         with self._lock:
             surf=ctypes.c_void_p(); luid=LUID(); fmt=ctypes.c_uint(); flags=ctypes.c_uint(); upd=ctypes.c_uint64()
-            if not self._dwm(hwnd,ctypes.byref(surf),ctypes.byref(luid),ctypes.byref(fmt),ctypes.byref(flags),ctypes.byref(upd)) or not surf.value: return None
+            if not self._dwm(hwnd,ctypes.byref(surf),ctypes.byref(luid),ctypes.byref(fmt),ctypes.byref(flags),ctypes.byref(upd)) or not surf.value:
+                log.debug("no DWM surface for hwnd %s", hwnd); return None
             pair=self._device_for(luid)
             if pair is None: return None
             dev,ctx=pair; tex=ctypes.c_void_p()
             hr=vtcall(dev,28,ctypes.c_long,[ctypes.c_void_p,ctypes.POINTER(GUID),ctypes.POINTER(ctypes.c_void_p)],surf,ctypes.byref(IID_ID3D11_TEXTURE2D),ctypes.byref(tex))
-            if not hr_ok(hr): return None
+            if not hr_ok(hr): log.warning("OpenSharedResource failed: %s",hr_name(hr)); return None
             try:
                 desc=D3D11_TEXTURE2D_DESC(); vtcall(tex,10,None,[ctypes.POINTER(D3D11_TEXTURE2D_DESC)],ctypes.byref(desc))
+                mutex=ctypes.c_void_p(); has_mutex=hr_ok(vtcall(tex,0,ctypes.c_long,[ctypes.POINTER(GUID),ctypes.POINTER(ctypes.c_void_p)],ctypes.byref(IID_IDXGI_KEYED_MUTEX),ctypes.byref(mutex)))
+                if has_mutex:
+                    hr=vtcall(mutex,8,ctypes.c_long,[ctypes.c_uint64,ctypes.c_uint],0,0)
+                    if not hr_ok(hr): com_release(mutex); log.warning("AcquireSync failed: %s",hr_name(hr)); return None
                 staging=ctypes.c_void_p(); sd= D3D11_TEXTURE2D_DESC(); ctypes.memmove(ctypes.byref(sd),ctypes.byref(desc),ctypes.sizeof(desc)); sd.Usage=3; sd.BindFlags=0; sd.CPUAccessFlags=0x20000; sd.MiscFlags=0
                 hr=vtcall(dev,5,ctypes.c_long,[ctypes.POINTER(D3D11_TEXTURE2D_DESC),ctypes.c_void_p,ctypes.POINTER(ctypes.c_void_p)],ctypes.byref(sd),None,ctypes.byref(staging))
-                if not hr_ok(hr): return None
+                if not hr_ok(hr):
+                    if has_mutex: vtcall(mutex,9,ctypes.c_long,[ctypes.c_uint64],0); com_release(mutex)
+                    log.warning("CreateTexture2D staging failed: %s",hr_name(hr)); return None
                 try:
-                    vtcall(ctx,47,None,[ctypes.c_void_p,ctypes.c_void_p],staging,tex); mapped=D3D11_MAPPED_SUBRESOURCE(); hr=vtcall(ctx,14,ctypes.c_long,[ctypes.c_void_p,ctypes.c_uint,ctypes.c_uint,ctypes.c_uint,ctypes.POINTER(D3D11_MAPPED_SUBRESOURCE)],staging,0,1,0,ctypes.byref(mapped))
-                    if not hr_ok(hr): return None
+                    vtcall(ctx,47,None,[ctypes.c_void_p,ctypes.c_void_p],staging,tex)
+                    if has_mutex: vtcall(mutex,9,ctypes.c_long,[ctypes.c_uint64],0)
+                    mapped=D3D11_MAPPED_SUBRESOURCE(); hr=vtcall(ctx,14,ctypes.c_long,[ctypes.c_void_p,ctypes.c_uint,ctypes.c_uint,ctypes.c_uint,ctypes.POINTER(D3D11_MAPPED_SUBRESOURCE)],staging,0,1,0,ctypes.byref(mapped))
+                    if not hr_ok(hr): log.warning("Map staging texture failed: %s",hr_name(hr)); return None
                     try: return to_rgb(mapped,desc)
                     finally: vtcall(ctx,15,None,[ctypes.c_void_p,ctypes.c_uint],staging,0)
-                finally: com_release(staging)
+                finally:
+                    com_release(staging)
+                    if has_mutex: com_release(mutex)
             finally: com_release(tex)
 def read_surface(hwnd): return DwmSurfaceReader().grab(hwnd)
