@@ -39,7 +39,10 @@ def emergency_release() -> None:
     # Release modifiers and mouse buttons defensively.
     for vk in (0x10, 0x11, 0x12, 0x5B, 0x5C):
         _key(vk, False)
-    for flag in (0x0004, 0x0008, 0x0010, 0x0020):
+    # MOUSEEVENTF_* button-up flags. Do not send button-down flags here:
+    # doing so can leave the local desktop in a stuck-button state after a
+    # disconnect or service stop.
+    for flag in (0x0004, 0x0010, 0x0040, 0x0100, 0x0400):
         _mouse(0, 0, 0, flag)
 
 
