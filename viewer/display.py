@@ -85,6 +85,8 @@ class ViewerDisplay:
             self.control_send(kind, **data)
 
     def _on_key_down(self, event):
+        if event.keysym == "Escape":
+            return self._on_emergency_stop(event)
         if event.keysym.lower() == "f8":
             self.control_enabled = not self.control_enabled
             if self.control_send:
