@@ -39,6 +39,10 @@ class Config:
     monitor: int = 0               # 0 = primary monitor
     max_width: int = 1280          # stream downscale limit; 0 = native width
     max_height: int = 720          # stream downscale limit; 0 = native height
+    capture_backend: str = "auto"
+    affinity_enabled: bool = True
+    affinity_poll_ms: int = 1000
+    affinity_max_failures: int = 5
 
     # --- Paths / runtime ---
     config_path: Optional[str] = field(default=None, repr=False)
@@ -72,6 +76,10 @@ class Config:
             monitor=raw.get("monitor", 0),
             max_width=raw.get("max_width", 1280),
             max_height=raw.get("max_height", 720),
+            capture_backend=raw.get("capture_backend", "auto"),
+            affinity_enabled=raw.get("affinity_enabled", True),
+            affinity_poll_ms=raw.get("affinity_poll_ms", 1000),
+            affinity_max_failures=raw.get("affinity_max_failures", 5),
             config_path=path,
         )
         cfg.validate()
@@ -110,6 +118,15 @@ class Config:
 
         if not isinstance(self.max_height, int) or self.max_height < 0:
             errors.append("max_height must be a non-negative integer")
+
+        if self.capture_backend not in {"auto", "gdi"}:
+            errors.append("capture_backend must be auto or gdi")
+        if not isinstance(self.affinity_enabled, bool):
+            errors.append("affinity_enabled must be a boolean")
+        if not isinstance(self.affinity_poll_ms, int) or self.affinity_poll_ms < 1:
+            errors.append("affinity_poll_ms must be a positive integer")
+        if not isinstance(self.affinity_max_failures, int) or self.affinity_max_failures < 1:
+            errors.append("affinity_max_failures must be a positive integer")
 
         if errors:
             raise ConfigError("invalid config: " + "; ".join(errors))

@@ -120,6 +120,8 @@ def _run_worker(cfg: Config) -> int:
     cap_cfg = capture_mod.CaptureConfig(
         frame_rate=cfg.frame_rate, quality=cfg.quality, monitor=cfg.monitor,
         max_width=cfg.max_width, max_height=cfg.max_height,
+        capture_backend=cfg.capture_backend, affinity_enabled=cfg.affinity_enabled,
+        affinity_poll_ms=cfg.affinity_poll_ms, affinity_max_failures=cfg.affinity_max_failures,
     )
     try:
         asyncio.run(capture_mod.capture_loop(cap_cfg, sink, stop_event))
@@ -139,6 +141,8 @@ async def _run_foreground(cfg: Config, stop_event: asyncio.Event) -> None:
     cap_cfg = capture_mod.CaptureConfig(
         frame_rate=cfg.frame_rate, quality=cfg.quality, monitor=cfg.monitor,
         max_width=cfg.max_width, max_height=cfg.max_height,
+        capture_backend=cfg.capture_backend, affinity_enabled=cfg.affinity_enabled,
+        affinity_poll_ms=cfg.affinity_poll_ms, affinity_max_failures=cfg.affinity_max_failures,
     )
 
     capture_task = asyncio.create_task(
@@ -181,9 +185,19 @@ def main(argv: Optional[list] = None) -> int:
         help="capture-only Helper mode: read the screen, stream frames to the "
         "Boss's loopback socket (runs in the user session)",
     )
+    parser.add_argument("--diagnose-windows", action="store_true",
+                        help="print visible top-level window affinity diagnostics")
     args = parser.parse_args(argv)
 
     cfg = Config.load(args.config)
+
+    if args.diagnose_windows:
+        from daemon.capture.affinity import scan
+        print("HWND\tCLASS\tTITLE\tCLIENT_RECT\tZ_INDEX\tAFFINITY")
+        for w in scan():
+            r = w.client_rect
+            print(f"{w.hwnd}\t{w.class_name}\t{w.title}\t{r.left},{r.top},{r.right},{r.bottom}\t{w.z_index}\t{w.affinity}")
+        return 0
 
     if args.worker:
         return _run_worker(cfg)
