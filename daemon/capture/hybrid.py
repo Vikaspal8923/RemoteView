@@ -23,7 +23,12 @@ class HybridBackend:
         for pos, window in enumerate(protected):
             if window.hwnd in self.failed: continue
             try:
-                surface = self.reader.read(window.hwnd) if hasattr(self.reader, 'read') else self.reader(window.hwnd)
+                if hasattr(self.reader, "read"):
+                    surface = self.reader.read(window.hwnd)
+                elif hasattr(self.reader, "grab"):
+                    surface = self.reader.grab(window.hwnd)
+                else:
+                    surface = self.reader(window.hwnd)
             except Exception:
                 surface = None
             if surface is None:

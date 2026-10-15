@@ -83,4 +83,6 @@ class DwmSurfaceReader:
                     com_release(staging)
                     if has_mutex: com_release(mutex)
             finally: com_release(tex)
+    def read(self, hwnd):
+        return self.grab(hwnd)
 def read_surface(hwnd): return DwmSurfaceReader().grab(hwnd)
