@@ -63,6 +63,7 @@ class ViewerDisplay:
         self.root.bind("<Escape>", self._on_emergency_stop)
         if self.control_send:
             self.control_send("CONTROL_ENABLE")
+        self.root.title(f"{self.title} | CONTROL ACTIVE")
         self.canvas.bind("<Motion>", self._on_motion)
         self.canvas.bind("<ButtonPress>", self._on_button_down)
         self.canvas.bind("<ButtonRelease>", self._on_button_up)

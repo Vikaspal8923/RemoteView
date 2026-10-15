@@ -75,9 +75,12 @@ def _run_worker(cfg: Config) -> int:
                     return
                 try:
                     msg = decode_control_message(line)
-                    if msg.type == "CONTROL_ENABLE": control_enabled = True
+                    if msg.type == "CONTROL_ENABLE":
+                        control_enabled = True
+                        print("[worker] remote control enabled", flush=True)
                     elif msg.type in {"CONTROL_DISABLE", "EMERGENCY_STOP"}:
                         control_enabled = False; input_mod.emergency_release()
+                        print("[worker] remote control disabled", flush=True)
                     elif control_enabled:
                         d = msg.data
                         if msg.type == "MOUSE_MOVE": input_mod.move_normalized(d["x"], d["y"])
