@@ -31,7 +31,8 @@ class DwmSurfaceReader:
         if dxgi is None or d3d11 is None: return None
         factory=ctypes.c_void_p()
         create=dxgi.CreateDXGIFactory1; create.argtypes=[ctypes.POINTER(GUID),ctypes.POINTER(ctypes.c_void_p)]; create.restype=ctypes.c_long
-        if not hr_ok(create(ctypes.byref(IID_IDXGI_FACTORY1),ctypes.byref(factory))): return None
+        hr=create(ctypes.byref(IID_IDXGI_FACTORY1),ctypes.byref(factory))
+        if not hr_ok(hr): log.warning("CreateDXGIFactory1 failed: %s",hr_name(hr)); return None
         adapter=None
         try:
             i=0
@@ -41,11 +42,11 @@ class DwmSurfaceReader:
                 desc=DXGI_ADAPTER_DESC1(); vtcall(a,11,None,[ctypes.POINTER(DXGI_ADAPTER_DESC1)],ctypes.byref(desc))
                 if desc.AdapterLuid.LowPart==luid.LowPart and desc.AdapterLuid.HighPart==luid.HighPart: adapter=a; break
                 com_release(a); i+=1
-            if adapter is None: log.warning("no DXGI adapter matches DWM surface LUID"); return None
-            dev=ctypes.c_void_p(); ctx=ctypes.c_void_p(); levels=(ctypes.c_uint*1)(11)
+            if adapter is None: log.warning("no DXGI adapter matches DWM surface LUID %08x:%08x",luid.HighPart & 0xffffffff,luid.LowPart); return None
+            dev=ctypes.c_void_p(); ctx=ctypes.c_void_p(); levels=(ctypes.c_uint*1)(D3D_FEATURE_LEVEL_11_0)
             d3d11.D3D11CreateDevice.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_void_p,ctypes.c_uint,ctypes.POINTER(ctypes.c_uint),ctypes.c_uint,ctypes.c_uint,ctypes.POINTER(ctypes.c_void_p),ctypes.c_void_p,ctypes.POINTER(ctypes.c_void_p)]; d3d11.D3D11CreateDevice.restype=ctypes.c_long
-            hr=d3d11.D3D11CreateDevice(adapter,D3D_DRIVER_TYPE_UNKNOWN,None,D3D11_CREATE_DEVICE_BGRA_SUPPORT,levels,1,7,ctypes.byref(dev),None,ctypes.byref(ctx))
-            if not hr_ok(hr): return None
+            hr=d3d11.D3D11CreateDevice(adapter,D3D_DRIVER_TYPE_UNKNOWN,None,D3D11_CREATE_DEVICE_BGRA_SUPPORT,levels,1,D3D11_SDK_VERSION,ctypes.byref(dev),None,ctypes.byref(ctx))
+            if not hr_ok(hr): log.warning("D3D11CreateDevice failed: %s",hr_name(hr)); return None
             self._devices[key]=dev; self._contexts[key]=ctx; return dev,ctx
         finally: com_release(factory)
     def grab(self, hwnd):
