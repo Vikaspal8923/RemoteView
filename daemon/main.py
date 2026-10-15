@@ -62,7 +62,9 @@ def _run_worker(cfg: Config) -> int:
     import threading
     from shared.control import decode_control_message
     from daemon import input as input_mod
-    control_enabled = False
+    # Testing mode: accept input immediately after the authenticated Helper
+    # connection. Escape/F8 on the viewer can disable it.
+    control_enabled = True
     def read_controls():
         nonlocal control_enabled
         try:

@@ -27,7 +27,9 @@ class ViewerDisplay:
         self.frame_queue = frame_queue
         self.title = title
         self.control_send = control_send
-        self.control_enabled = False
+        # Enabled by default for the current testing build. Escape still
+        # disables control immediately; F8 toggles it thereafter.
+        self.control_enabled = True
 
         self.root = tk.Tk()
         self.root.title(self.title)
@@ -59,6 +61,8 @@ class ViewerDisplay:
         self.root.bind("<KeyPress>", self._on_key_down)
         self.root.bind("<KeyRelease>", self._on_key_up)
         self.root.bind("<Escape>", self._on_emergency_stop)
+        if self.control_send:
+            self.control_send("CONTROL_ENABLE")
         self.canvas.bind("<Motion>", self._on_motion)
         self.canvas.bind("<ButtonPress>", self._on_button_down)
         self.canvas.bind("<ButtonRelease>", self._on_button_up)

@@ -400,8 +400,9 @@ Windows virtual-key identifiers, with separate key-down and key-up events.
 
 ### Control state and safety
 
-Control is disabled by default. The viewer must show a clear state such as
-`MONITORING ONLY` or `REMOTE CONTROL ACTIVE`. The design requires:
+For the current testing build, control is enabled by default after the
+authenticated connection is established. The viewer must show a clear state
+such as `CONTROL ACTIVE` or `MONITORING ONLY`. The design requires:
 
 - explicit user confirmation before enabling control;
 - a visible enable/disable control on the viewer;
@@ -424,7 +425,7 @@ Linux → Windows: validated control packets
 Implementation will be staged as follows:
 
 1. Add control packet types and bidirectional transport tests.
-2. Add Windows Helper input injection behind a disabled-by-default flag.
+2. Add Windows Helper input injection and default testing-mode activation.
 3. Add viewer mouse/keyboard event capture and coordinate mapping.
 4. Add explicit enable/disable UI and emergency stop behavior.
 5. Test disconnects, held keys, multiple monitors, locked screens, and
