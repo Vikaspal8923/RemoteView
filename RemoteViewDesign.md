@@ -8,7 +8,9 @@ into a Session-0 Boss service and an interactive desktop Helper because a
 Windows service cannot capture the logged-in desktop directly. Frames are
 downscaled, JPEG-compressed, and streamed over TLS to the viewer.
 
-Scope: **screen monitoring only** (v1). No keyboard or mouse control.
+Scope: **screen monitoring plus limited keyboard and mouse control**. Audio,
+camera, clipboard, file transfer, shell commands, process control, and other
+remote administration features remain out of scope.
 
 ---
 
@@ -77,7 +79,7 @@ Decodes the code, pulls cert and config from the home machine automatically, sav
 
 ---
 
-## ## Connection Flow — Technical Detail
+## Connection Flow — Technical Detail
 
 **Phase 1 — Pairing**
 
@@ -257,6 +259,56 @@ Both machines use the same file. Generate once, copy to both.
 - Title bar shows latency (`unix_ms` delta) and FPS
 - `Q` key or window close → triggers clean shutdown
 - Runs on the main thread (tkinter requirement)
+
+## Remote control design
+
+Remote control is enabled by default when the viewer connects. The viewer
+sends validated mouse movement, clicks, scrolling, key, and text events over
+the existing authenticated TLS connection. The Windows Session-0 Boss
+forwards those messages to the interactive desktop Helper, which performs
+Windows `SendInput` in the logged-in user's session.
+
+The Helper contains a local-input arbiter. Low-level Windows keyboard and
+mouse hooks distinguish physical local input from RemoteView-injected input.
+When the Windows user moves, clicks, or types, only remote input is paused;
+the service, connection, and screen stream continue running. Remote input is
+allowed again automatically after the local user is idle. If both sides act
+simultaneously, local Windows input wins. Remote-held keys and buttons are
+released on local takeover, Escape, disconnect, or service stop.
+
+The viewer uses `F8` to toggle remote control and `Escape` for an emergency
+stop. Control messages are bounded JSON-lines messages limited to
+`CONTROL_ENABLE`, `CONTROL_DISABLE`, `EMERGENCY_STOP`, `MOUSE_MOVE`,
+`MOUSE_BUTTON_DOWN`, `MOUSE_BUTTON_UP`, `MOUSE_SCROLL`, `KEY_DOWN`, `KEY_UP`,
+and `TYPE_TEXT`. They cannot execute shell commands or control processes.
+
+Windows UIPI prevents a normal Helper from injecting input into elevated
+Administrator windows. Normal applications and non-elevated Command Prompt
+windows are supported; the home user's physical keyboard and mouse always
+remain usable.
+
+### `daemon/input.py` and `daemon/input_arbiter.py`
+
+`input.py` is Windows-only and implements normalized mouse movement, buttons,
+scrolling, virtual keys, and Unicode text through `SendInput`. The arbiter is
+started only by the interactive Helper, never by the Session-0 service. A
+lock serializes remote input sequences, and disconnect cleanup sends correct
+button-up and key-up events to avoid stuck local input.
+
+## Setup and path behavior
+
+`setup.py --mode host` automatically prefers the host's local LAN address,
+which is suitable for the Windows-home/Linux-viewer setup. Use `--ip` when a
+machine has multiple adapters or a VPN. Windows setup commands use
+`%USERPROFILE%`, and Linux commands use `~`, so usernames and home paths are
+resolved automatically. The service stores the absolute config path at
+installation time and resolves certificate paths relative to that config.
+
+Before a fresh run, stop the service and viewer processes using the cleanup
+commands in `README.md`. The default ports are TCP 9001 for pairing, TCP 9000
+for the viewer, and local Windows port 47921 for Boss-to-Helper communication.
+If a port is busy, stop the old process or choose another viewer port; the
+pairing port is automatically the viewer port plus one.
 
 ### `viewer/main.py`
 
