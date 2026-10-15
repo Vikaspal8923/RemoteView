@@ -8,6 +8,12 @@ from __future__ import annotations
 
 import sys
 import ctypes
+import threading
+
+
+# Keep multi-event operations (clicks, Unicode characters, modifier keys)
+# contiguous when the local user and the remote helper are active together.
+_INPUT_LOCK = threading.RLock()
 
 
 class InputError(RuntimeError):
@@ -58,8 +64,9 @@ class _INPUT(ctypes.Structure):
 
 
 def _send(inp):
-    if ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp)) != 1:
-        raise InputError("SendInput failed")
+    with _INPUT_LOCK:
+        if ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp)) != 1:
+            raise InputError("SendInput failed")
 
 
 def _key(vk: int, down: bool):
@@ -112,8 +119,16 @@ def key_name(name: str, down: bool):
     }
     key = name.upper()
     vk = names.get(key)
-    if vk is None and len(key) == 1:
-        vk = ord(key)
+    if vk is None and len(key) == 1 and key.isalnum():
+        # Windows virtual-key codes for letters are uppercase ASCII.
+        vk = ord(key.upper())
+    punctuation = {
+        "-": 0xBD, "=": 0xBB, "[": 0xDB, "]": 0xDD, "\\": 0xDC,
+        ";": 0xBA, "'": 0xDE, ",": 0xBC, ".": 0xBE, "/": 0xBF,
+        "`": 0xC0,
+    }
+    if vk is None:
+        vk = punctuation.get(key)
     if vk is None or not 0 <= vk <= 255:
         raise InputError(f"unsupported key: {name}")
     key_virtual(vk, down)

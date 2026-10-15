@@ -37,6 +37,12 @@ class ViewerDisplay:
 
         self.canvas = tk.Canvas(self.root, bg="black", highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
+        # Keyboard events belong to the viewer window even when the user last
+        # clicked the canvas. Explicit focus also makes typing work on Linux
+        # window managers that do not focus a Canvas automatically.
+        self.canvas.focus_set()
+        self.root.bind_all("<KeyPress>", self._on_key_down, add="+")
+        self.root.bind_all("<KeyRelease>", self._on_key_up, add="+")
 
         # Current photo image kept alive to avoid GC; drawn via canvas image.
         self._photo: Optional[ImageTk.PhotoImage] = None
@@ -58,9 +64,6 @@ class ViewerDisplay:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.bind("<q>", self._on_q)
         self.root.bind("<Q>", self._on_q)
-        self.root.bind("<KeyPress>", self._on_key_down)
-        self.root.bind("<KeyRelease>", self._on_key_up)
-        self.root.bind("<Escape>", self._on_emergency_stop)
         if self.control_send:
             self.control_send("CONTROL_ENABLE")
         self.root.title(f"{self.title} | CONTROL ACTIVE")
@@ -120,6 +123,7 @@ class ViewerDisplay:
         x, y = self._coords(event); self._send_control("MOUSE_MOVE", x=x, y=y)
 
     def _on_button_down(self, event):
+        self.canvas.focus_set()
         x, y = self._coords(event); self._send_control("MOUSE_MOVE", x=x, y=y)
         self._send_control("MOUSE_BUTTON_DOWN", button={1:"left",2:"middle",3:"right"}.get(event.num,"left"))
 
