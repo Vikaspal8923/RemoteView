@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+import time
 from typing import Optional
 
 from shared.config import Config
@@ -71,11 +72,15 @@ def _run_worker(cfg: Config) -> int:
     import threading
     from shared.control import decode_control_message
     from daemon import input as input_mod
+    from daemon.input_arbiter import LocalInputArbiter
     # Testing mode: accept input immediately after the authenticated Helper
     # connection. Escape/F8 on the viewer can disable it.
     control_enabled = True
+    arbiter = LocalInputArbiter(idle_seconds=1.5)
+    arbiter.start()
+    last_local_pause_log = 0.0
     def read_controls():
-        nonlocal control_enabled
+        nonlocal control_enabled, last_local_pause_log
         try:
             reader = sock.makefile("rb")
             while True:
@@ -91,6 +96,13 @@ def _run_worker(cfg: Config) -> int:
                         control_enabled = False; input_mod.emergency_release()
                         worker_log("[worker] remote control disabled")
                     elif control_enabled:
+                        if not arbiter.remote_allowed():
+                            input_mod.emergency_release()
+                            now = time.monotonic()
+                            if now - last_local_pause_log > 1.0:
+                                worker_log("[worker] remote input paused: local user active")
+                                last_local_pause_log = now
+                            continue
                         d = msg.data
                         if msg.type == "MOUSE_MOVE": input_mod.move_normalized(d["x"], d["y"])
                         elif msg.type.startswith("MOUSE_BUTTON_"): input_mod.mouse_button(d["button"], msg.type.endswith("DOWN"))
@@ -114,6 +126,7 @@ def _run_worker(cfg: Config) -> int:
     except KeyboardInterrupt:
         stop_event.set()
     finally:
+        arbiter.stop()
         sink.close()
     return 0
 
