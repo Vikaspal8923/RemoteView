@@ -210,6 +210,48 @@ type "%USERPROFILE%\RemoteView\remoteview-service.log"
 py -3.13 tests\test_windows_smoke.py
 ```
 
+### Clean previous runs
+
+Use these commands before a fresh test. They stop RemoteView processes and
+services without deleting the repository, configuration, or certificates.
+
+#### Windows home machine
+
+Open **Administrator Command Prompt**:
+
+```bat
+cd /d "%USERPROFILE%\RemoteView"
+py -3.13 -m daemon.service.windows stop
+```
+
+Stop remaining RemoteView-related processes:
+
+```bat
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'RemoteView|daemon.main|setup.py' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+```
+
+Verify:
+
+```bat
+tasklist | findstr /I "python pythonservice"
+```
+
+#### Linux viewer machine
+
+```bash
+pkill -f 'viewer.main|setup.py --mode viewer' || true
+pkill -f 'daemon.main|RemoteView' || true
+```
+
+Verify no viewer remains and port 9000 is free:
+
+```bash
+ps aux | grep -E 'viewer.main|daemon.main|RemoteView' | grep -v grep
+ss -ltnp | grep ':9000' || true
+```
+
+No output from the final command means the Linux viewer port is available.
+
 ## Run it (Phase 1, single-process foreground mode)
 
 1. Generate a cert + token and write a config:
