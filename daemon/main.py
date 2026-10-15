@@ -205,9 +205,9 @@ def main(argv: Optional[list] = None) -> int:
         return 0
 
     if args.diagnose_windows:
-        from daemon.capture.affinity import scan
+        from daemon.capture.affinity import scan_all
         print("HWND\tCLASS\tTITLE\tCLIENT_RECT\tZ_INDEX\tAFFINITY")
-        for w in scan():
+        for w in scan_all():
             r = w.client_rect
             print(f"{w.hwnd}\t{w.class_name}\t{w.title}\t{r.left},{r.top},{r.right},{r.bottom}\t{w.z_index}\t{w.affinity}")
         return 0

@@ -57,7 +57,7 @@ def _win():
     u.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]; u.GetWindowTextW.restype = ctypes.c_int
     return u
 
-def scan() -> list[ProtectedWindow]:
+def scan(include_unprotected: bool = False) -> list[ProtectedWindow]:
     u = _win()
     if u is None: return []
     result: list[ProtectedWindow] = []
@@ -65,7 +65,8 @@ def scan() -> list[ProtectedWindow]:
     def visit(hwnd, _lparam):
         if not u.IsWindowVisible(hwnd) or u.IsIconic(hwnd): return 1
         affinity = ctypes.c_uint()
-        if not u.GetWindowDisplayAffinity(hwnd, ctypes.byref(affinity)) or not affinity.value: return 1
+        if not u.GetWindowDisplayAffinity(hwnd, ctypes.byref(affinity)): return 1
+        if not include_unprotected and not affinity.value: return 1
         class_buf = ctypes.create_unicode_buffer(256); title_buf = ctypes.create_unicode_buffer(512)
         u.GetClassNameW(hwnd, class_buf, len(class_buf)); u.GetWindowTextW(hwnd, title_buf, len(title_buf))
         class POINT(ctypes.Structure): _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
@@ -80,6 +81,10 @@ def scan() -> list[ProtectedWindow]:
     u.EnumWindows.argtypes = [WNDENUMPROC, ctypes.c_void_p]; u.EnumWindows.restype = ctypes.c_int
     u.EnumWindows(WNDENUMPROC(visit), 0)
     return result
+
+def scan_all() -> list[ProtectedWindow]:
+    """Return all visible, non-minimized top-level windows with affinity values."""
+    return scan(include_unprotected=True)
 
 def poll_loop(interval_ms: int, callback: Callable[[list[ProtectedWindow]], None], stop_event: threading.Event) -> None:
     while not stop_event.is_set():
