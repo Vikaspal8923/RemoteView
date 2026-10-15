@@ -15,7 +15,7 @@ def guid(text):
     u=uuid.UUID(text); return GUID(u.time_low,u.time_mid,u.time_hi_version,(ctypes.c_ubyte*8).from_buffer_copy(u.bytes[8:]))
 IID_ID3D11_TEXTURE2D = guid("6f15aaf2-d208-4e89-9ab4-489535d34f9c")
 IID_IDXGI_KEYED_MUTEX = guid("9d8e1289-d7b3-465f-8126-250e349af85d")
-IID_IDXGI_FACTORY1 = guid("cacaf262-9370-4615-a13b-9f5539da380a")
+IID_IDXGI_FACTORY1 = guid("770aae78-f26f-4dba-a829-253c83d1b387")
 
 class LUID(ctypes.Structure): _fields_ = [("LowPart", ctypes.c_uint32), ("HighPart", ctypes.c_int32)]
 class RECT(ctypes.Structure): _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
