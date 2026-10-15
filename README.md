@@ -2,7 +2,8 @@
 
 Self-hosted screen monitoring: a headless daemon on the home (target) machine
 streams compressed screen frames over an encrypted TLS 1.3 tunnel to a viewer
-on the remote (operator) machine. **Screen monitoring only — no input control.**
+on the remote (operator) machine. It supports screen monitoring plus keyboard
+and mouse control.
 
 See `RemoteViewDesign.md` for the full design.
 
@@ -160,8 +161,51 @@ Expected:
 RemoteViewDaemon: RUNNING
 ```
 
-The service launches the interactive capture Helper automatically. Do not run
+The service launches the interactive capture Helper automatically. Remote
+control is enabled by default when the viewer connects. The Linux viewer can
+move the mouse, click, scroll, and type into normal (non-Administrator)
+Windows applications. Press `F8` in the viewer to toggle remote control;
+press `Escape` for the emergency stop. The Windows user's local keyboard and
+mouse always have priority: remote input pauses during local activity and
+resumes automatically after the user becomes idle. Do not run
 `daemon.main --worker` manually during normal use.
+
+Administrator windows are protected by Windows security (UIPI). Test typing
+and clicking in a normal Command Prompt or another normal application, not a
+Command Prompt launched with **Run as administrator**.
+
+### Remote-control recovery
+
+If the screen still streams but remote clicks or typing stop working, update
+and restart both sides. On Windows, use an Administrator Command Prompt:
+
+```bat
+cd /d "%USERPROFILE%\RemoteView"
+py -3.13 -m daemon.service.windows stop
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'RemoteView|daemon.main' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+git pull
+py -3.13 -m pip install -r requirements.txt
+py -3.13 -m daemon.service.windows start
+py -3.13 -m daemon.service.windows status
+```
+
+On Linux:
+
+```bash
+cd ~/Desktop/RemoteView
+source .venv/bin/activate
+git pull
+pkill -f 'viewer.main|setup.py --mode viewer' || true
+python -m viewer.main --config config.json
+```
+
+If Windows input is left stuck after an interrupted older run, reboot Windows
+once after stopping the service, then start the service again. Check the logs:
+
+```bat
+type "%USERPROFILE%\RemoteView\remoteview-service.log"
+type "%USERPROFILE%\RemoteView\remoteview-helper.log"
+```
 
 ### Ports and recovery
 
