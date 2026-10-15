@@ -13,3 +13,7 @@ if __import__('sys').platform == 'win32':
 def require(handle, name: str):
     if handle is None: raise RuntimeError(f'{name} is only available on Windows')
     return handle
+
+def exports():
+    """Return the lazily loaded DLL export availability."""
+    return {"user32": user32 is not None, "d3d11": d3d11 is not None, "dxgi": dxgi is not None}
