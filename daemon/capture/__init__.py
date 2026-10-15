@@ -30,10 +30,18 @@ async def capture_loop(cfg: CaptureConfig, sink: FrameSink, stop_event: Optional
     # Keep optional Windows capture dependencies out of import-time paths.
     from .gdi import GdiBackend
     from .hybrid import HybridBackend
-    backend = GdiBackend(cfg.monitor) if cfg.capture_backend == "gdi" else HybridBackend(gdi=GdiBackend(cfg.monitor))
+    gdi = GdiBackend(cfg.monitor)
+    backend = gdi if cfg.capture_backend == "gdi" else HybridBackend(gdi=gdi)
+    if cfg.capture_backend != "gdi" and cfg.affinity_enabled and __import__('sys').platform == 'win32':
+        from .affinity import scan
+        from .dwmsurface import DwmSurfaceReader
+        backend.reader = DwmSurfaceReader()
     try:
         while not stop_event.is_set():
-            start=time.monotonic(); img=backend.capture()
+            start=time.monotonic()
+            if cfg.capture_backend != "gdi" and cfg.affinity_enabled and __import__('sys').platform == 'win32':
+                backend.windows = scan()
+            img=backend.capture()
             if cfg.max_width>0 and cfg.max_height>0 and (img.width>cfg.max_width or img.height>cfg.max_height): img.thumbnail((cfg.max_width,cfg.max_height), Image.Resampling.LANCZOS)
             now=max(int(time.time()*1000), last+1); last=now
             try: sink.put(compress_to_jpeg(img,cfg.quality), now)
