@@ -7,6 +7,10 @@ if __import__('sys').platform == 'win32':
         kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
         d3d11 = ctypes.WinDLL('d3d11', use_last_error=True)
         dxgi = ctypes.WinDLL('dxgi', use_last_error=True)
+        # HMODULE is pointer-sized; explicit declarations are required on
+        # 64-bit Windows or ctypes truncates the DLL handle.
+        kernel32.GetProcAddress.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+        kernel32.GetProcAddress.restype = ctypes.c_void_p
     except Exception:
         user32 = kernel32 = d3d11 = dxgi = None
 
