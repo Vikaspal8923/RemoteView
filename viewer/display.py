@@ -106,7 +106,15 @@ class ViewerDisplay:
             self._send_control("KEY_UP", key=event.keysym)
 
     def _coords(self, event):
-        return max(0.0, min(1.0, event.x / max(1, self.canvas.winfo_width()))), max(0.0, min(1.0, event.y / max(1, self.canvas.winfo_height())))
+        # The frame is aspect-fitted and centered in the canvas. Convert from
+        # canvas coordinates to normalized source-image coordinates, excluding
+        # the letterbox bars.
+        cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
+        iw = self._photo.width() if self._photo is not None else cw
+        ih = self._photo.height() if self._photo is not None else ch
+        ox, oy = (cw - iw) / 2.0, (ch - ih) / 2.0
+        return (max(0.0, min(1.0, (event.x - ox) / max(1, iw))),
+                max(0.0, min(1.0, (event.y - oy) / max(1, ih))))
 
     def _on_motion(self, event):
         x, y = self._coords(event); self._send_control("MOUSE_MOVE", x=x, y=y)

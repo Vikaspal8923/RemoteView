@@ -103,6 +103,12 @@ def key_name(name: str, down: bool):
         "LEFT": 0x25, "UP": 0x26, "RIGHT": 0x27, "DOWN": 0x28,
         "DELETE": 0x2E, "HOME": 0x24, "END": 0x23, "PAGEUP": 0x21,
         "PAGEDOWN": 0x22,
+        "CONTROL_L": 0x11, "CONTROL_R": 0x11,
+        "SHIFT_L": 0x10, "SHIFT_R": 0x10,
+        "ALT_L": 0x12, "ALT_R": 0x12,
+        "RETURN": 0x0D, "KP_ENTER": 0x0D,
+        "ESCAPE": 0x1B, "DEL": 0x2E,
+        "CAPS_LOCK": 0x14, "SUPER_L": 0x5B, "SUPER_R": 0x5C,
     }
     key = name.upper()
     vk = names.get(key)
