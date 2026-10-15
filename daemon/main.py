@@ -59,6 +59,36 @@ def _run_worker(cfg: Config) -> int:
         return 4
 
     print("[worker] connected + authenticated to Boss; capturing", flush=True)
+    import threading
+    from shared.control import decode_control_message
+    from daemon import input as input_mod
+    control_enabled = False
+    def read_controls():
+        nonlocal control_enabled
+        try:
+            reader = sock.makefile("rb")
+            while True:
+                line = reader.readline()
+                if not line:
+                    return
+                try:
+                    msg = decode_control_message(line)
+                    if msg.type == "CONTROL_ENABLE": control_enabled = True
+                    elif msg.type in {"CONTROL_DISABLE", "EMERGENCY_STOP"}:
+                        control_enabled = False; input_mod.emergency_release()
+                    elif control_enabled:
+                        d = msg.data
+                        if msg.type == "MOUSE_MOVE": input_mod.move_normalized(d["x"], d["y"])
+                        elif msg.type.startswith("MOUSE_BUTTON_"): input_mod.mouse_button(d["button"], msg.type.endswith("DOWN"))
+                        elif msg.type == "MOUSE_SCROLL": input_mod.scroll(d["delta"])
+                        elif msg.type in {"KEY_DOWN", "KEY_UP"}: input_mod.key_name(d["key"], msg.type.endswith("DOWN"))
+                        elif msg.type == "TYPE_TEXT": input_mod.type_text(d["text"])
+                except Exception as exc:
+                    print(f"[worker] control rejected: {exc!r}", flush=True)
+        finally:
+            control_enabled = False
+            input_mod.emergency_release()
+    threading.Thread(target=read_controls, daemon=True, name="control-reader").start()
     sink = transport_mod.FrameSocketWriter(sock)
     stop_event = asyncio.Event()
     cap_cfg = capture_mod.CaptureConfig(

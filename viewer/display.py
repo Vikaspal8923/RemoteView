@@ -23,9 +23,11 @@ POLL_INTERVAL_MS = 15
 class ViewerDisplay:
     """A tkinter window that continuously renders incoming frames."""
 
-    def __init__(self, frame_queue: "queue.Queue", title: str = "RemoteView"):
+    def __init__(self, frame_queue: "queue.Queue", title: str = "RemoteView", control_send=None):
         self.frame_queue = frame_queue
         self.title = title
+        self.control_send = control_send
+        self.control_enabled = False
 
         self.root = tk.Tk()
         self.root.title(self.title)
@@ -54,6 +56,13 @@ class ViewerDisplay:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.bind("<q>", self._on_q)
         self.root.bind("<Q>", self._on_q)
+        self.root.bind("<KeyPress>", self._on_key_down)
+        self.root.bind("<KeyRelease>", self._on_key_up)
+        self.root.bind("<Escape>", self._on_emergency_stop)
+        self.canvas.bind("<Motion>", self._on_motion)
+        self.canvas.bind("<ButtonPress>", self._on_button_down)
+        self.canvas.bind("<ButtonRelease>", self._on_button_up)
+        self.canvas.bind("<MouseWheel>", self._on_wheel)
 
     # ---- event handlers ---- #
     def _on_close(self):
@@ -63,6 +72,47 @@ class ViewerDisplay:
     def _on_q(self, _event=None):
         self._stop_requested = True
         self.root.destroy()
+
+    def _on_emergency_stop(self, _event=None):
+        self.control_enabled = False
+        if self.control_send:
+            self.control_send("EMERGENCY_STOP")
+        self.root.title(f"{self.title} | MONITORING ONLY")
+        return "break"
+
+    def _send_control(self, kind, **data):
+        if self.control_enabled and self.control_send:
+            self.control_send(kind, **data)
+
+    def _on_key_down(self, event):
+        if event.keysym.lower() == "f8":
+            self.control_enabled = not self.control_enabled
+            if self.control_send:
+                self.control_send("CONTROL_ENABLE" if self.control_enabled else "CONTROL_DISABLE")
+            self.root.title(f"{self.title} | {'CONTROL ACTIVE' if self.control_enabled else 'MONITORING ONLY'}")
+            return "break"
+        if event.keysym not in ("q", "Q"):
+            self._send_control("KEY_DOWN", key=event.keysym)
+
+    def _on_key_up(self, event):
+        if event.keysym not in ("q", "Q", "F8"):
+            self._send_control("KEY_UP", key=event.keysym)
+
+    def _coords(self, event):
+        return max(0.0, min(1.0, event.x / max(1, self.canvas.winfo_width()))), max(0.0, min(1.0, event.y / max(1, self.canvas.winfo_height())))
+
+    def _on_motion(self, event):
+        x, y = self._coords(event); self._send_control("MOUSE_MOVE", x=x, y=y)
+
+    def _on_button_down(self, event):
+        x, y = self._coords(event); self._send_control("MOUSE_MOVE", x=x, y=y)
+        self._send_control("MOUSE_BUTTON_DOWN", button={1:"left",2:"middle",3:"right"}.get(event.num,"left"))
+
+    def _on_button_up(self, event):
+        self._send_control("MOUSE_BUTTON_UP", button={1:"left",2:"middle",3:"right"}.get(event.num,"left"))
+
+    def _on_wheel(self, event):
+        self._send_control("MOUSE_SCROLL", delta=max(-20, min(20, int(event.delta / 120))))
 
     @property
     def stop_requested(self) -> bool:

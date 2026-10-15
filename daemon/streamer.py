@@ -97,6 +97,7 @@ async def stream_frames(
     source: FrameSource,
     stop_event: Optional[asyncio.Event] = None,
     connect_timeout: float = 10.0,
+    control_handler=None,
 ) -> None:
     """Open TLS to the viewer, authenticate, and pump frames until stopped.
 
@@ -144,6 +145,9 @@ async def stream_frames(
         # Connected + authenticated. Reset backoff.
         attempt = 0
         _log("authenticated; streaming frames")
+        control_task = None
+        if control_handler is not None:
+            control_task = asyncio.create_task(_read_controls(reader, control_handler))
 
         try:
             while not stop_event.is_set():
@@ -163,7 +167,32 @@ async def stream_frames(
         except (ConnectionError, ssl.SSLError, OSError) as exc:
             _log(f"connection lost: {exc!r}; reconnecting")
         finally:
+            if control_task is not None:
+                control_task.cancel()
             await _safe_close(writer)
+
+
+async def _read_controls(reader, handler):
+    """Read viewer control JSON lines concurrently with outgoing frames."""
+    from shared.control import decode_control_message
+    try:
+        while True:
+            line = await reader.readline()
+            if not line:
+                return
+            try:
+                handler(decode_control_message(line))
+            except Exception as exc:
+                _log(f"invalid control message: {exc!r}")
+    except (ConnectionError, OSError, asyncio.CancelledError):
+        return
+    finally:
+        # A dropped viewer must always revoke control and release held input.
+        from shared.control import ControlMessage
+        try:
+            handler(ControlMessage("EMERGENCY_STOP", {}))
+        except Exception:
+            pass
 
 
 async def _safe_close(writer: Optional[asyncio.StreamWriter]) -> None:

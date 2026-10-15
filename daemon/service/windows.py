@@ -25,6 +25,7 @@ import asyncio
 import os
 import sys
 import threading
+import queue
 from typing import Optional
 
 SERVICE_NAME = "RemoteViewDaemon"
@@ -184,7 +185,8 @@ class BossOrchestrator:
     async def _run_until_stop(self, loop, frame_queue, source, cfg):
         from daemon import streamer as streamer_mod
 
-        pump_task = asyncio.ensure_future(self._frame_pump(loop, frame_queue, cfg))
+        control_queue = queue.Queue()
+        pump_task = asyncio.ensure_future(self._frame_pump(loop, frame_queue, cfg, control_queue))
         stream_stop = asyncio.Event()
 
         def start_stream(current_cfg):
@@ -196,6 +198,7 @@ class BossOrchestrator:
                     current_cfg.tls_cert,
                     source,
                     stream_stop,
+                    control_handler=lambda msg: control_queue.put(msg),
                 )
             )
 
@@ -239,7 +242,7 @@ class BossOrchestrator:
             except asyncio.CancelledError:
                 pass
 
-    async def _frame_pump(self, loop, frame_queue: asyncio.Queue, cfg):
+    async def _frame_pump(self, loop, frame_queue: asyncio.Queue, cfg, control_queue):
         """Create + accept the loopback socket; read frames into frame_queue.
 
         Blocking socket I/O is offloaded to a thread executor so it does not
@@ -274,6 +277,19 @@ class BossOrchestrator:
                 transport_mod.close_handle(listen_sock)
                 await asyncio.sleep(0.25)
                 continue
+            sender_stop = threading.Event()
+            def send_controls():
+                while not sender_stop.is_set():
+                    try:
+                        msg = control_queue.get(timeout=0.2)
+                    except queue.Empty:
+                        continue
+                    try:
+                        conn.sendall(msg.encode())
+                    except OSError:
+                        return
+            sender = threading.Thread(target=send_controls, daemon=True, name="helper-control-sender")
+            sender.start()
             print("[boss] Helper connected + authenticated; reading frames", flush=True)
             while not self._stop.is_set():
                 try:
@@ -294,6 +310,7 @@ class BossOrchestrator:
                         pass
                 frame_queue.put_nowait((payload, ts_ms))
             transport_mod.close_handle(conn)
+            sender_stop.set()
             transport_mod.close_handle(listen_sock)
 
 

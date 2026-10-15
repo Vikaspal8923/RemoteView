@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import io
 import ssl
+import queue
 from typing import Optional
 
 from PIL import Image
@@ -29,7 +30,7 @@ class AuthError(Exception):
     """Raised when a client fails the token check."""
 
 
-async def _handle_client(reader, writer, expected_token_hex: str, out_queue: asyncio.Queue):
+async def _handle_client(reader, writer, expected_token_hex: str, out_queue: asyncio.Queue, control_queue=None):
     """Handle one daemon connection: auth, then stream frames into out_queue."""
     peer = writer.get_extra_info("peername")
     try:
@@ -43,6 +44,21 @@ async def _handle_client(reader, writer, expected_token_hex: str, out_queue: asy
             return
         await _send_all(writer, proto.AUTH_OK + proto.AUTH_NEWLINE)
         print(f"[receiver] auth OK from {peer}; streaming", flush=True)
+
+        async def send_controls():
+            if control_queue is None:
+                return
+            while True:
+                try:
+                    msg = await asyncio.to_thread(control_queue.get, True, 0.2)
+                    writer.write(msg)
+                    await writer.drain()
+                except queue.Empty:
+                    continue
+                except (ConnectionError, OSError, asyncio.CancelledError):
+                    return
+
+        control_task = asyncio.create_task(send_controls()) if control_queue is not None else None
 
         # 2. Read frames until the client disconnects.
         while True:
@@ -67,6 +83,8 @@ async def _handle_client(reader, writer, expected_token_hex: str, out_queue: asy
     except (ConnectionError, ssl.SSLError, OSError) as exc:
         print(f"[receiver] connection error with {peer}: {exc!r}", flush=True)
     finally:
+        if 'control_task' in locals() and control_task is not None:
+            control_task.cancel()
         try:
             writer.close()
             await writer.wait_closed()
@@ -81,6 +99,7 @@ async def serve(
     expected_token_hex: str,
     out_queue: asyncio.Queue,
     stop_event: Optional[asyncio.Event] = None,
+    control_queue=None,
 ) -> None:
     """Listen for daemons, authenticate, and fill ``out_queue`` with frames.
 
@@ -91,7 +110,7 @@ async def serve(
 
     ssl_ctx = crypto.build_ssl_context_server(tls_cert_path, tls_key_path)
     server = await asyncio.start_server(
-        lambda r, w: _handle_client(r, w, expected_token_hex, out_queue),
+        lambda r, w: _handle_client(r, w, expected_token_hex, out_queue, control_queue),
         host="0.0.0.0",
         port=viewer_port,
         ssl=ssl_ctx,

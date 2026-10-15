@@ -29,6 +29,7 @@ def _run_receiver_thread(
     bridge: "queue.Queue",
     stop_event: asyncio.Event,
     ready: threading.Event,
+    control_queue,
 ) -> threading.Thread:
     """Start the asyncio receiver loop on a daemon thread."""
 
@@ -47,6 +48,7 @@ def _run_receiver_thread(
                     cfg.auth_token,
                     out_q,
                     stop_event,
+                    control_queue,
                 )
             )
             ready.set()
@@ -82,14 +84,19 @@ def main(argv: Optional[list] = None) -> int:
     cfg = Config.load(args.config)
 
     bridge: "queue.Queue" = queue.Queue(maxsize=BRIDGE_QUEUE_MAX)
+    control_queue = queue.Queue()
     stop_event = asyncio.Event()
     ready = threading.Event()
 
-    _run_receiver_thread(cfg, bridge, stop_event, ready)
+    _run_receiver_thread(cfg, bridge, stop_event, ready, control_queue)
     ready.wait(timeout=5.0)
 
     # tkinter on the main thread; returns when the window is closed / Q pressed.
-    disp = display_mod.ViewerDisplay(bridge, title="RemoteView")
+    def send_control(kind, **data):
+        from shared.control import make_control
+        control_queue.put(make_control(kind, **data))
+
+    disp = display_mod.ViewerDisplay(bridge, title="RemoteView", control_send=send_control)
     disp.run()
 
     # Signal the receiver thread to stop.
